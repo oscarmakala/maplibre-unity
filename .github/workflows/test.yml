@@ -1,0 +1,120 @@
+name: Unity Tests
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Single runner runs EditMode then PlayMode sequentially. Saves a runner
+  # slot and avoids two parallel Unity license activations consuming separate
+  # seats. Wall-clock is the sum of both modes (~15-20 min) instead of the
+  # previous ~10 min parallel matrix.
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    env:
+      # game-ci/unity-test-runner@v4.3.1 is still bundled with Node 20.
+      # Until upstream ships a Node 24 build, opt the runner into Node 24
+      # so the action survives the 2026-06-02 default switch / 2026-09-16
+      # Node 20 removal. Drop this once unity-test-runner ships v5+.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Free disk space
+        run: |
+          echo "=== Before ==="
+          df -h /
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo docker system prune -af || true
+          echo "=== After ==="
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          lfs: true
+
+      - name: Cache Library
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: Library
+          # Single Library shared across both test modes — both reuse the
+          # same Editor compilation output, so per-mode keys would just
+          # split the cache for no gain.
+          key: Library-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-
+
+      - name: Run EditMode tests
+        id: editmode
+        uses: game-ci/unity-test-runner@0ff419b913a3630032cbe0de48a0099b5a9f0ed9 # v4.3.1
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          unityVersion: 6000.3.10f1
+          testMode: EditMode
+          artifactsPath: EditMode-artifacts
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: EditMode Test Results
+          coverageOptions: 'generateAdditionalMetrics;generateHtmlReport;generateBadgeReport;assemblyFilters:+MapLibre.Unity,+MapLibre.Unity.Editor'
+
+      - name: Run PlayMode tests
+        id: playmode
+        # if: always() so PlayMode still runs when EditMode fails — both
+        # results show up as separate check annotations regardless.
+        if: always()
+        uses: game-ci/unity-test-runner@0ff419b913a3630032cbe0de48a0099b5a9f0ed9 # v4.3.1
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          unityVersion: 6000.3.10f1
+          testMode: PlayMode
+          artifactsPath: PlayMode-artifacts
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: PlayMode Test Results
+          coverageOptions: 'generateAdditionalMetrics;generateHtmlReport;generateBadgeReport;assemblyFilters:+MapLibre.Unity,+MapLibre.Unity.Editor'
+
+      - name: Upload EditMode test results
+        if: always() && steps.editmode.outputs.artifactsPath != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Test results (EditMode)
+          path: ${{ steps.editmode.outputs.artifactsPath }}
+
+      - name: Upload PlayMode test results
+        if: always() && steps.playmode.outputs.artifactsPath != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Test results (PlayMode)
+          path: ${{ steps.playmode.outputs.artifactsPath }}
+
+      - name: Upload EditMode coverage results
+        if: always() && steps.editmode.outputs.coveragePath != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Coverage results (EditMode)
+          path: ${{ steps.editmode.outputs.coveragePath }}
+
+      - name: Upload PlayMode coverage results
+        if: always() && steps.playmode.outputs.coveragePath != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Coverage results (PlayMode)
+          path: ${{ steps.playmode.outputs.coveragePath }}

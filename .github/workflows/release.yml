@@ -1,0 +1,226 @@
+name: Release
+
+# Triggers:
+#   - tag push (v*.*.*) -- the canonical "release this version" path.
+#     Runs the package.json version-vs-tag guardrail and deploys the tag
+#     snapshot to Pages.
+#   - workflow_dispatch -- maintainer-driven ad-hoc redeploy of any ref
+#     (preview a feature branch before tagging, redeploy after a transient
+#     CI failure, etc.).
+# main pushes do NOT auto-deploy: keeping Pages tied to tagged releases
+# avoids surprise rollbacks from in-progress mainline work and keeps
+# Application.version stable for users referencing the live demo URL.
+# There is no GitHub Release object created and no Player binary / UPM
+# tarball uploaded -- the package is consumed via UPM git URL
+# (`?path=...#vX.Y.Z`), and the live demo lives on Pages.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  # contents: write so the release job can create the GitHub Release object.
+  # checkout in the release job also needs read; write is a superset.
+  contents: write
+  pages: write
+  id-token: write
+
+# A newer trigger cancels an in-flight run from the same group. With group:
+# pages everyone shares one lane, so pushing v0.4.0 while v0.3.0's CI is
+# mid-build kills v0.3.0 and immediately starts v0.4.0. Pages then reflects
+# the latest tag without waiting on the older build, and an accidental
+# tag-push can be overwritten by simply pushing the next one. Trade-off:
+# the cancelled tag's Release is not created -- if a multi-tag rollout is
+# intended, push tags spaced by build time (~30 min) or temporarily flip
+# this back to false.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # No test job here -- tags are applied to already-tested mainline commits
+  # (test.yml runs on every PR), and workflow_dispatch deploys whatever ref
+  # the maintainer chose, so re-running the suite would just burn ~15 min
+  # of CI without adding signal. Re-run test.yml directly via its own
+  # workflow_dispatch entry if a tagged commit needs spot verification.
+  build-webgl:
+    name: Build WebGL
+    runs-on: ubuntu-latest
+    env:
+      # game-ci/unity-builder@v4.6.0 still ships with Node 20; opt the runner
+      # into Node 24 so the action survives the 2026-06-02 default switch.
+      # Mirrors test.yml -- drop once unity-builder ships v5+.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Free disk space
+        run: |
+          echo "=== Before ==="
+          df -h /
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo docker system prune -af || true
+          echo "=== After ==="
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          lfs: true
+
+      - name: Verify package.json version matches tag
+        # Guardrail: tag and package.json must agree before we deploy. Stops
+        # accidental drift where someone tags v0.4.0 but forgot to bump the
+        # manifest, which would mislead UPM consumers pinning to that tag.
+        # Only runs on actual tag pushes -- main pushes and dispatch deploys
+        # have no tag to compare against.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(jq -r .version Packages/com.kazukikuriyama.maplibre-unity/package.json)
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Packages/com.kazukikuriyama.maplibre-unity/package.json version ${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Version match: ${TAG_VERSION}"
+
+      - name: Cache Library
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: Library
+          key: Library-Build-WebGL-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-Build-WebGL-
+            Library-
+
+      - name: Inject release version into PlayerSettings.bundleVersion
+        # Repository keeps a placeholder bundleVersion (0.0.0-dev) so dev /
+        # Editor builds don't pretend to be a real release. CI overwrites it
+        # so Application.version reflects what was deployed:
+        #   - tag push -> the tag version (e.g. 0.3.0)
+        #   - dispatch -> "dev-{sha7}" (e.g. dev-a9c71d4)
+        # The cache key above is computed before this step runs, so the
+        # placeholder hash keeps Library cache hits working across deploys.
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dev-${GITHUB_SHA:0:7}"
+          fi
+          sed -i.bak "s/^  bundleVersion: .*/  bundleVersion: ${VERSION}/" ProjectSettings/ProjectSettings.asset
+          rm ProjectSettings/ProjectSettings.asset.bak
+          grep '^  bundleVersion:' ProjectSettings/ProjectSettings.asset
+
+      - name: Build WebGL
+        # TODO: pin to a SHA once the desired unity-builder version is verified,
+        # to match the SHA-pinning convention used by test.yml.
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          unityVersion: 6000.3.10f1
+          targetPlatform: WebGL
+          buildName: maplibre-unity
+          versioning: None
+
+      - name: Upload Pages artifact
+        # game-ci/unity-builder writes its output to
+        # build/<targetPlatform>/<buildName>/ -- with buildName=maplibre-unity
+        # that becomes build/WebGL/maplibre-unity/. GitHub Pages serves
+        # whatever sits at the root of the uploaded tarball, so point at the
+        # inner directory directly to land index.html / Build/ / TemplateData/
+        # at the artifact root. Pointing at build/WebGL would put the site at
+        # /maplibre-unity/ inside Pages, returning 404 for the configured
+        # repo path.
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v4.0.0
+        with:
+          path: build/WebGL/maplibre-unity
+
+  deploy-pages:
+    needs: build-webgl
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+
+  release:
+    # Tag-only: workflow_dispatch deploys a preview but does NOT cut a Release.
+    # Runs after deploy-pages so the Release URL embedded in the notes only
+    # appears once Pages is actually live for that tag.
+    needs: deploy-pages
+    if: startsWith(github.ref, 'refs/tags/')
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Build release notes
+        id: notes
+        # Pull the [vX.Y.Z] block out of CHANGELOG.md and append the
+        # canonical install URL so users can copy-paste from the Release
+        # page without ever needing to read README. README only links to
+        # releases/latest, so this body becomes the maintained source of
+        # truth for the right URL.
+        #
+        # The live-demo URL is intentionally NOT included: GitHub Pages
+        # serves a single version at a time (always the latest deployed
+        # tag), so embedding it in per-tag release notes would mislead
+        # readers of older releases into thinking the link reflects that
+        # tag's build when it actually shows the latest.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BODY=$(awk -v v="$VERSION" '
+            /^## \[/ {
+              if (capturing) { exit }
+              if (index($0, "[" v "]")) { capturing = 1; next }
+            }
+            capturing { print }
+          ' CHANGELOG.md)
+          if [ -z "$BODY" ]; then
+            BODY="Release ${GITHUB_REF_NAME}. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details."
+          fi
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            echo "$BODY"
+            echo ''
+            echo '## Install via Unity Package Manager'
+            echo ''
+            echo 'In Unity Editor open **Window -> Package Manager -> + -> Install package from git URL...** and paste:'
+            echo ''
+            echo '```'
+            echo "https://github.com/${{ github.repository }}.git?path=Packages/com.kazukikuriyama.maplibre-unity#${GITHUB_REF_NAME}"
+            echo '```'
+            echo ''
+            echo 'Or add to `Packages/manifest.json`:'
+            echo ''
+            echo '```json'
+            echo '{'
+            echo '  "dependencies": {'
+            echo "    \"com.kazukikuriyama.maplibre-unity\": \"https://github.com/${{ github.repository }}.git?path=Packages/com.kazukikuriyama.maplibre-unity#${GITHUB_REF_NAME}\""
+            echo '  }'
+            echo '}'
+            echo '```'
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.body }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
