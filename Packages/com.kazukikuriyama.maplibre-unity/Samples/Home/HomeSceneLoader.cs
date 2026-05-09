@@ -214,7 +214,9 @@ namespace MapLibre.Unity.Samples
             };
             scroll.Add(title);
 
-            var subtitle = new Label("Select a sample to open the scene")
+            // Application.version is rewritten to the pushed tag by release.yml
+            // for tagged builds; local Editor runs see PlayerSettings' "dev".
+            var subtitle = new Label($"v{Application.version} — Select a sample to open the scene")
             {
                 pickingMode = PickingMode.Ignore,
                 style =
