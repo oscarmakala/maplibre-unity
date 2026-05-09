@@ -4,7 +4,11 @@
 
 # MapLibre Unity
 
-A Unity port of [MapLibre GL JS](https://maplibre.org/).
+[MapLibre](https://maplibre.org/), running natively as a Unity package.
+Includes Unity-native components (`PrefabSource`, `MapCameraTarget`,
+`CameraDrivenMapState`, …) so GameObjects can be anchored to a
+`LngLat`, the map camera can be driven by external rigs like
+Cinemachine, and the whole thing wires up through the Inspector.
 
 **[▶ Live WebGL demo](https://kazukikuriyama.github.io/maplibre-unity/)**
 — browse every bundled sample scene in the browser. Re-deployed
