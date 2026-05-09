@@ -176,14 +176,7 @@ for the full set of WebGL adaptations.
 The exact UPM Git URL pinned to the latest tag is published with every
 release. See the
 [**latest release**](https://github.com/KazukiKuriyama/maplibre-unity/releases/latest)
-page — the release notes contain copy-paste blocks for both Package
-Manager dialog and `Packages/manifest.json` entry, so README never needs
-to be edited per version.
-
-The
-[Releases index](https://github.com/KazukiKuriyama/maplibre-unity/releases)
-also lists older tags if you need to pin to a specific historical
-version.
+page.
 
 ### Clone the repository (contributors / sample browsing)
 
@@ -192,7 +185,7 @@ The repository itself is a Unity project. The package source lives at
 package when you open the project in Unity Hub. Sample scenes ship
 bundled at `Packages/com.kazukikuriyama.maplibre-unity/Samples/` and
 appear directly under **Packages → MapLibre Unity → Samples** in the
-Project window — no import step is required. Open
+Project window. Open
 `Packages/MapLibre Unity/Samples/Home/HomeScene.unity` to launch the
 demo browser.
 
@@ -202,8 +195,7 @@ The package's URP shaders are registered with **Project Settings →
 Graphics → Always Included Shaders** automatically on first Editor
 load — no manual setup required. To re-run the registration manually
 (e.g. after pulling new shader files), use **MapLibreUnity → Register
-Always Included Shaders**. Implementation details live in
-[Documentation~/Architecture.md](Documentation~/Architecture.md#shader-registration).
+Always Included Shaders**.
 
 ## Quick Start
 
@@ -344,7 +336,7 @@ Detailed walkthroughs live under `Documentation~/`. Quick map:
 
 Samples ship bundled with the package and appear in the Project window
 under **Packages → MapLibre Unity → Samples** as soon as the package
-is installed — no import step required. Open
+is installed. Open
 `Packages/MapLibre Unity/Samples/Home/HomeScene.unity` for a launcher
 that lists every demo, or load one directly. Samples are read-only
 because they live under `Packages/`; copy a demo folder into `Assets/`
@@ -418,27 +410,6 @@ Contributor docs:
   implementation notes.
 - [AGENTS.md](AGENTS.md) — canonical project rules for AI coding
   agents.
-
-
-The API reference is generated from XML doc-comments via
-[DocFX](https://dotnet.github.io/docfx/). To build the site locally:
-
-```sh
-# Install the DocFX CLI once (requires .NET 8 SDK or newer)
-dotnet tool install -g docfx
-
-# Open the project in Unity once so the Runtime / Editor source paths
-# resolve, then build the documentation site
-docfx Documentation~/docfx.json --serve
-```
-
-The generated site lands in `Documentation~/_site/` (gitignored) and
-DocFX serves it at `http://localhost:8080`. The metadata extraction step
-populates `Documentation~/api/` (also gitignored apart from a seed
-`index.md`) with one YAML file per public type.
-
-A GitHub Pages publish workflow is left as a future addition (paired
-with whatever CI runner ends up being viable for this repo).
 
 ## License
 
