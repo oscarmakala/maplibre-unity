@@ -226,110 +226,33 @@ namespace MapLibre.Unity.Source
             Action<CanonicalTileID, Texture2D> onComplete,
             Action<CanonicalTileID, string> onError)
         {
-            var transformed = RequestTransformer.Apply(_transformRequest, url, ResourceKind.Tile);
-            if (transformed.Abort)
+            var fetch = new CachedHttpFetch
             {
-                _activeRequests--;
-                _pendingRequests.Remove(tileId);
+                Url = url,
+                TransformRequest = _transformRequest,
+                Kind = ResourceKind.Tile,
+                OnRequestStarted = req => _activeWebRequests[tileId] = req,
+                OnRequestEnded = () => _activeWebRequests.Remove(tileId),
+                IsStillPending = () => _pendingRequests.Contains(tileId),
+            };
+            yield return fetch.Run();
+
+            _activeRequests--;
+            _pendingRequests.Remove(tileId);
+
+            if (fetch.Aborted)
+            {
                 ProcessQueue();
                 yield break;
             }
 
-            // Disk cache lookup. Cached fresh hits skip the HTTP request entirely;
-            // stale hits forward an If-None-Match header for cheap revalidation.
-            // GetAsync resolves synchronously on native and after 1-2 frames on
-            // WebGL (one IndexedDB transaction round-trip).
-            byte[] rawBytes = null;
-            byte[] cachedBytes = null;
-            TileDiskCache.CacheEntry cacheMeta = null;
-            var cacheLookup = new TileDiskCache.LookupResult();
-            yield return TileDiskCache.GetAsync(transformed.Url, cacheLookup);
-            if (cacheLookup.Hit)
-            {
-                cachedBytes = cacheLookup.Data;
-                cacheMeta = cacheLookup.Meta;
-                if (cacheLookup.IsFresh) rawBytes = cachedBytes;
-            }
-
-            UnityWebRequest request = null;
-            int attempt = 0;
-            string lastError = null;
-
-            if (rawBytes == null)
-            {
-                while (attempt < HttpRetryPolicy.DefaultMaxAttempts)
-                {
-                    // Use raw byte download (not UnityWebRequestTexture) so the response
-                    // body is available for disk caching. We decode to Texture2D below.
-                    request = UnityWebRequest.Get(transformed.Url);
-                    request.SetRequestHeader("User-Agent", "MapLibre-Unity/0.1");
-                    ApplyHeaders(request, transformed.Headers);
-                    if (cacheMeta != null && !string.IsNullOrEmpty(cacheMeta.ETag))
-                        request.SetRequestHeader("If-None-Match", cacheMeta.ETag);
-                    _activeWebRequests[tileId] = request;
-
-                    yield return request.SendWebRequest();
-
-                    // CancelRequest may have already disposed this request while we were yielding.
-                    if (!_activeWebRequests.TryGetValue(tileId, out var current) || current != request)
-                    {
-                        ProcessQueue();
-                        yield break;
-                    }
-
-                    if (request.result == UnityWebRequest.Result.Success)
-                        break;
-
-                    lastError = request.error;
-                    if (!HttpRetryPolicy.ShouldRetry(request))
-                        break;
-
-                    request.Dispose();
-                    request = null;
-                    _activeWebRequests.Remove(tileId);
-                    attempt++;
-                    if (attempt >= HttpRetryPolicy.DefaultMaxAttempts) break;
-
-                    float delay = HttpRetryPolicy.BackoffSeconds(attempt);
-                    yield return new UnityEngine.WaitForSeconds(delay);
-
-                    if (!_pendingRequests.Contains(tileId))
-                    {
-                        ProcessQueue();
-                        yield break;
-                    }
-                }
-            }
-
-            _activeRequests--;
-            _pendingRequests.Remove(tileId);
-            _activeWebRequests.Remove(tileId);
-
-            // 304 Not Modified → use cached body, refresh its freshness window.
-            if (request != null && request.responseCode == 304 && cachedBytes != null)
-            {
-                rawBytes = cachedBytes;
-                TileDiskCache.Touch(transformed.Url, request.GetResponseHeader("Cache-Control"));
-                request.Dispose();
-                request = null;
-            }
-
-            if (request != null && request.result == UnityWebRequest.Result.Success)
-            {
-                rawBytes = request.downloadHandler.data;
-                string cc = request.GetResponseHeader("Cache-Control");
-                string etag = request.GetResponseHeader("ETag");
-                request.Dispose();
-                request = null;
-                if (rawBytes != null && rawBytes.Length > 0)
-                    TileDiskCache.Put(transformed.Url, rawBytes, etag, cc);
-            }
-
-            if (rawBytes != null && rawBytes.Length > 0)
+            if (fetch.Bytes != null && fetch.Bytes.Length > 0)
             {
                 // Decode bytes → Texture2D on the main thread (LoadImage is main-thread).
+                // We download as raw bytes (not UnityWebRequestTexture) so the
+                // body is available for disk caching; the decode happens here.
                 var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                if (!texture.LoadImage(rawBytes))
+                if (!texture.LoadImage(fetch.Bytes))
                 {
                     UnityEngine.Object.Destroy(texture);
                     onError?.Invoke(tileId, $"{url}: image decode failed");
@@ -351,10 +274,9 @@ namespace MapLibre.Unity.Source
             }
             else
             {
-                onError?.Invoke(tileId, $"{url}: {lastError ?? "unknown error"}");
+                onError?.Invoke(tileId, $"{url}: {fetch.ErrorMessage ?? "unknown error"}");
             }
 
-            request?.Dispose();
             ProcessQueue();
         }
 
@@ -362,16 +284,6 @@ namespace MapLibre.Unity.Source
         {
             int templateIndex = Math.Abs(tileId.GetHashCode()) % _tileUrlTemplates.Count;
             return tileId.ToUrl(_tileUrlTemplates[templateIndex]);
-        }
-
-        private static void ApplyHeaders(UnityWebRequest request, Dictionary<string, string> headers)
-        {
-            if (headers == null) return;
-            foreach (var kvp in headers)
-            {
-                if (!string.IsNullOrEmpty(kvp.Key))
-                    request.SetRequestHeader(kvp.Key, kvp.Value ?? string.Empty);
-            }
         }
 
         public void Dispose()

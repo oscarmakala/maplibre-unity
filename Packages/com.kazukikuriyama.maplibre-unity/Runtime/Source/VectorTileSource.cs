@@ -217,7 +217,7 @@ namespace MapLibre.Unity.Source
                             return;
                         }
                         _coroutineHost.StartCoroutine(
-                            ParseCustomBytes(tileId, bytes, onComplete, onError));
+                            FinishCustomLoad(tileId, bytes, onComplete, onError));
                     },
                     err =>
                     {
@@ -242,7 +242,78 @@ namespace MapLibre.Unity.Source
             }
         }
 
-        private IEnumerator ParseCustomBytes(CanonicalTileID tileId, byte[] bytes,
+        private IEnumerator FinishCustomLoad(CanonicalTileID tileId, byte[] bytes,
+            Action<CanonicalTileID, VectorTileData> onComplete,
+            Action<CanonicalTileID, string> onError)
+        {
+            // The HTTP path decrements + removes BEFORE handing off to
+            // ParseAndDeliver (so the slot is freed regardless of how parsing
+            // ends). Mirror that ordering for the custom-loader path.
+            _activeRequests--;
+            _pendingRequests.Remove(tileId);
+
+            yield return ParseAndDeliver(tileId, bytes, "custom", onComplete, onError);
+            ProcessQueue();
+        }
+
+        private IEnumerator FetchTile(CanonicalTileID tileId, string url,
+            Action<CanonicalTileID, VectorTileData> onComplete,
+            Action<CanonicalTileID, string> onError)
+        {
+            var fetch = new CachedHttpFetch
+            {
+                Url = url,
+                TransformRequest = _transformRequest,
+                Kind = ResourceKind.Tile,
+                AcceptHeader = "application/x-protobuf, application/octet-stream",
+                OnRequestStarted = req => _activeWebRequests[tileId] = req,
+                OnRequestEnded = () => _activeWebRequests.Remove(tileId),
+                IsStillPending = () => _pendingRequests.Contains(tileId),
+            };
+            yield return fetch.Run();
+
+            _activeRequests--;
+            _pendingRequests.Remove(tileId);
+
+            if (fetch.Aborted)
+            {
+                ProcessQueue();
+                yield break;
+            }
+
+            if (fetch.Bytes != null)
+            {
+                yield return ParseAndDeliver(tileId, fetch.Bytes, url, onComplete, onError);
+                ProcessQueue();
+                yield break;
+            }
+
+            // 404 = tile has no data. MapLibre GL JS treats this as an empty
+            // tile (state=loaded, no features) rather than an error, since
+            // sparse vector datasets commonly have gaps.
+            if (fetch.StatusCode == 404)
+            {
+                var empty = new VectorTileData();
+                _cache.Put(tileId, empty);
+                onComplete?.Invoke(tileId, empty);
+            }
+            else
+            {
+                onError?.Invoke(tileId, $"{url}: {fetch.ErrorMessage ?? "no response"}");
+            }
+            ProcessQueue();
+        }
+
+        /// <summary>
+        /// gzip-decompress + PBF parse for a tile body and dispatch the result
+        /// to the caller. Shared between HTTP and custom-loader paths so both
+        /// honour the same parse timeout / cancellation semantics.
+        /// On native: the work runs on a worker via BackgroundTask.Run. On
+        /// WebGL Player there's no real worker, so ParseLazy is driven from
+        /// the main thread with a per-frame budget; otherwise a heavy planet
+        /// tile would freeze the main loop for seconds.
+        /// </summary>
+        private IEnumerator ParseAndDeliver(CanonicalTileID tileId, byte[] rawData, string url,
             Action<CanonicalTileID, VectorTileData> onComplete,
             Action<CanonicalTileID, string> onError)
         {
@@ -251,20 +322,16 @@ namespace MapLibre.Unity.Source
             var token = cts.Token;
 
 #if UNITY_WEBGL && !UNITY_EDITOR
-            // Single-thread WebGL: drive ParseLazy with a frame budget so the
-            // tile's worth of layers is spread across multiple frames.
             VectorTileData parsed = null;
             string failMessage = null;
             bool timedOut = false;
-            yield return ParseTileBytesIncremental(bytes, token,
+            yield return ParseTileBytesIncremental(rawData, token,
                 onParsed: t => parsed = t,
                 onTimedOut: msg => { failMessage = msg; timedOut = true; },
                 onFaulted: msg => failMessage = msg);
 
             _activeParseTasks.Remove(tileId);
             cts.Dispose();
-            _activeRequests--;
-            _pendingRequests.Remove(tileId);
 
             if (parsed != null)
             {
@@ -273,17 +340,17 @@ namespace MapLibre.Unity.Source
             }
             else if (timedOut)
             {
-                onError?.Invoke(tileId, $"Custom tile parse timeout: {failMessage}");
+                onError?.Invoke(tileId, $"Parse timeout for {url}: {failMessage}");
             }
             else
             {
                 onError?.Invoke(tileId,
-                    $"Custom tile parse: {failMessage ?? "Unknown parse error"}");
+                    $"Parse error for {url}: {failMessage ?? "Unknown parse error"}");
             }
 #else
             Task<VectorTileData> parseTask = BackgroundTask.Run(() =>
             {
-                byte[] data = bytes;
+                byte[] data = rawData;
                 if (data.Length >= 2 && data[0] == 0x1f && data[1] == 0x8b)
                 {
                     data = DecompressGzip(data);
@@ -294,6 +361,10 @@ namespace MapLibre.Unity.Source
                 return result;
             }, token);
 
+            // Wait for background completion with a wall-clock timeout.
+            // Stopwatch is used (not Time.deltaTime) so the timer is unaffected
+            // by Time.timeScale or Time.maximumDeltaTime clamping during low
+            // frame rates.
             var watch = System.Diagnostics.Stopwatch.StartNew();
             while (!parseTask.IsCompleted)
             {
@@ -310,9 +381,6 @@ namespace MapLibre.Unity.Source
             _activeParseTasks.Remove(tileId);
             cts.Dispose();
 
-            _activeRequests--;
-            _pendingRequests.Remove(tileId);
-
             if (parseTask.Status == TaskStatus.RanToCompletion && parseTask.Result != null)
             {
                 _cache.Put(tileId, parseTask.Result);
@@ -321,271 +389,19 @@ namespace MapLibre.Unity.Source
             else if (parseTask.IsCanceled)
             {
                 onError?.Invoke(tileId,
-                    $"Custom tile parse timeout: exceeded {ParseTimeoutSeconds}s");
+                    $"Parse timeout for {url}: exceeded {ParseTimeoutSeconds}s");
             }
-            else
+            else if (parseTask.IsFaulted)
             {
                 string errorMsg = parseTask.Exception?.InnerException?.Message
                                   ?? "Unknown parse error";
-                onError?.Invoke(tileId, $"Custom tile parse: {errorMsg}");
-            }
-#endif
-
-            ProcessQueue();
-        }
-
-        private IEnumerator FetchTile(CanonicalTileID tileId, string url,
-            Action<CanonicalTileID, VectorTileData> onComplete,
-            Action<CanonicalTileID, string> onError)
-        {
-            var transformed = RequestTransformer.Apply(_transformRequest, url, ResourceKind.Tile);
-            if (transformed.Abort)
-            {
-                _activeRequests--;
-                _pendingRequests.Remove(tileId);
-                ProcessQueue();
-                yield break;
-            }
-
-            // Disk cache lookup. A fresh hit short-circuits the HTTP request entirely;
-            // a stale hit forwards the ETag in If-None-Match for revalidation.
-            // GetAsync is synchronous on native and yields a few frames on
-            // WebGL while the IndexedDB transaction settles.
-            byte[] rawData = null;
-            byte[] cachedBytes = null;
-            string responseCacheControl = null;
-            string responseEtag = null;
-            bool servedFromCache = false;
-            TileDiskCache.CacheEntry cacheMeta = null;
-            var cacheLookup = new TileDiskCache.LookupResult();
-            yield return TileDiskCache.GetAsync(transformed.Url, cacheLookup);
-            if (cacheLookup.Hit)
-            {
-                cachedBytes = cacheLookup.Data;
-                cacheMeta = cacheLookup.Meta;
-                if (cacheLookup.IsFresh)
-                {
-                    rawData = cachedBytes;
-                    servedFromCache = true;
-                }
-            }
-
-            UnityWebRequest request = null;
-            int attempt = 0;
-            string lastError = null;
-
-            if (!servedFromCache)
-            {
-                while (attempt < HttpRetryPolicy.DefaultMaxAttempts)
-                {
-                    request = UnityWebRequest.Get(transformed.Url);
-                    request.SetRequestHeader("User-Agent", "MapLibre-Unity/0.1");
-                    request.SetRequestHeader("Accept", "application/x-protobuf, application/octet-stream");
-                    ApplyHeaders(request, transformed.Headers);
-                    if (cacheMeta != null && !string.IsNullOrEmpty(cacheMeta.ETag))
-                        request.SetRequestHeader("If-None-Match", cacheMeta.ETag);
-                    _activeWebRequests[tileId] = request;
-
-                    yield return request.SendWebRequest();
-
-                    // Unity-internal cleanup (e.g. PlayMode test scene teardown) can
-                    // invalidate the UnityWebRequest's native handle without going
-                    // through CancelRequest/Dispose. The entry stays in
-                    // _activeWebRequests but the request.result getter throws
-                    // NullReferenceException, so guard a probe property with
-                    // try-catch to detect external disposal.
-                    bool externallyDisposed = false;
-                    try { _ = request.isDone; }
-                    catch (System.NullReferenceException) { externallyDisposed = true; }
-
-                    if (externallyDisposed || !_activeWebRequests.ContainsKey(tileId))
-                    {
-                        _activeWebRequests.Remove(tileId);
-                        ProcessQueue();
-                        yield break;
-                    }
-
-                    if (request.result == UnityWebRequest.Result.Success)
-                        break;
-
-                    long status = request.responseCode;
-                    if (status == 404 || !HttpRetryPolicy.ShouldRetry(request))
-                        break;
-
-                    lastError = request.error;
-                    request.Dispose();
-                    request = null;
-                    _activeWebRequests.Remove(tileId);
-                    attempt++;
-                    if (attempt >= HttpRetryPolicy.DefaultMaxAttempts) break;
-
-                    yield return new UnityEngine.WaitForSeconds(HttpRetryPolicy.BackoffSeconds(attempt));
-                    if (!_pendingRequests.Contains(tileId))
-                    {
-                        ProcessQueue();
-                        yield break;
-                    }
-                }
-            }
-
-            _activeRequests--;
-            _pendingRequests.Remove(tileId);
-            _activeWebRequests.Remove(tileId);
-
-            // Promote cached body when the server reported 304 Not Modified.
-            if (request != null && request.responseCode == 304 && cacheMeta != null && cachedBytes != null)
-            {
-                rawData = cachedBytes;
-                responseCacheControl = request.GetResponseHeader("Cache-Control");
-                TileDiskCache.Touch(transformed.Url, responseCacheControl);
-                request.Dispose();
-                request = null;
-            }
-
-            if (request != null && request.result == UnityWebRequest.Result.Success)
-            {
-                rawData = request.downloadHandler.data;
-                responseCacheControl = request.GetResponseHeader("Cache-Control");
-                responseEtag = request.GetResponseHeader("ETag");
-                request.Dispose();
-                if (rawData != null && rawData.Length > 0)
-                    TileDiskCache.Put(transformed.Url, rawData, responseEtag, responseCacheControl);
-            }
-
-            if (rawData != null)
-            {
-
-                // gzip decompress + PBF parse. On threaded platforms this runs
-                // on a worker via BackgroundTask.Run. On WebGL Player the same
-                // wrapper would inline the work and freeze the main thread for
-                // the duration of a heavy tile, so we route through the
-                // incremental ParseLazy-driven coroutine instead.
-                var cts = new CancellationTokenSource();
-                _activeParseTasks[tileId] = cts;
-                var token = cts.Token;
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-                VectorTileData parsed = null;
-                string failMessage = null;
-                bool timedOut = false;
-                yield return ParseTileBytesIncremental(rawData, token,
-                    onParsed: t => parsed = t,
-                    onTimedOut: msg => { failMessage = msg; timedOut = true; },
-                    onFaulted: msg => failMessage = msg);
-
-                _activeParseTasks.Remove(tileId);
-                cts.Dispose();
-
-                if (parsed != null)
-                {
-                    _cache.Put(tileId, parsed);
-                    onComplete?.Invoke(tileId, parsed);
-                }
-                else if (timedOut)
-                {
-                    onError?.Invoke(tileId, $"Parse timeout for {url}: {failMessage}");
-                }
-                else
-                {
-                    onError?.Invoke(tileId,
-                        $"Parse error for {url}: {failMessage ?? "Unknown parse error"}");
-                }
-#else
-                Task<VectorTileData> parseTask = BackgroundTask.Run(() =>
-                {
-                    byte[] data = rawData;
-                    if (data.Length >= 2 && data[0] == 0x1f && data[1] == 0x8b)
-                    {
-                        data = DecompressGzip(data);
-                    }
-                    token.ThrowIfCancellationRequested();
-                    var result = VectorTileParser.Parse(data);
-                    token.ThrowIfCancellationRequested();
-                    return result;
-                }, token);
-
-                // Wait for background completion with a wall-clock timeout. Stopwatch
-                // is used (not Time.deltaTime) so the timer is unaffected by Time.timeScale
-                // or Time.maximumDeltaTime clamping during low frame rates.
-                var watch = System.Diagnostics.Stopwatch.StartNew();
-                while (!parseTask.IsCompleted)
-                {
-                    if (watch.Elapsed.TotalSeconds > ParseTimeoutSeconds)
-                    {
-                        cts.Cancel();
-                        // Wait for the task to wind down (cancellation isn't instant)
-                        while (!parseTask.IsCompleted)
-                            yield return null;
-                        break;
-                    }
-                    yield return null;
-                }
-
-                _activeParseTasks.Remove(tileId);
-                cts.Dispose();
-
-                if (parseTask.Status == TaskStatus.RanToCompletion && parseTask.Result != null)
-                {
-                    _cache.Put(tileId, parseTask.Result);
-                    onComplete?.Invoke(tileId, parseTask.Result);
-                }
-                else if (parseTask.IsCanceled)
-                {
-                    onError?.Invoke(tileId,
-                        $"Parse timeout for {url}: exceeded {ParseTimeoutSeconds}s");
-                }
-                else if (parseTask.IsFaulted)
-                {
-                    string errorMsg = parseTask.Exception?.InnerException?.Message
-                                      ?? "Unknown parse error";
-                    onError?.Invoke(tileId, $"Parse error for {url}: {errorMsg}");
-                }
-                else
-                {
-                    onError?.Invoke(tileId, $"Parse returned null for {url}");
-                }
-#endif
+                onError?.Invoke(tileId, $"Parse error for {url}: {errorMsg}");
             }
             else
             {
-                // 404 = tile has no data. MapLibre GL JS treats this as an empty
-                // tile (state=loaded, no features) rather than an error, since
-                // sparse vector datasets commonly have gaps.
-                //
-                // The request may have been externally disposed (e.g. by a
-                // SetStyle teardown that ran while we were yielding). Probing
-                // any property on a disposed UnityWebRequest throws NRE even
-                // though the managed reference is non-null, so guard here
-                // mirroring the SendWebRequest-loop check above.
-                long status = 0;
-                string errorText = lastError ?? "no response";
-                if (request != null)
-                {
-                    try
-                    {
-                        status = request.responseCode;
-                        errorText = request.error ?? errorText;
-                    }
-                    catch (System.NullReferenceException)
-                    {
-                        // request was externally disposed; fall back to lastError
-                    }
-                }
-                request?.Dispose();
-
-                if (status == 404)
-                {
-                    var empty = new VectorTileData();
-                    _cache.Put(tileId, empty);
-                    onComplete?.Invoke(tileId, empty);
-                }
-                else
-                {
-                    onError?.Invoke(tileId, $"{url}: {errorText}");
-                }
+                onError?.Invoke(tileId, $"Parse returned null for {url}");
             }
-
-            ProcessQueue();
+#endif
         }
 
         private static byte[] DecompressGzip(byte[] compressed)
@@ -674,16 +490,6 @@ namespace MapLibre.Unity.Source
         {
             int templateIndex = Math.Abs(tileId.GetHashCode()) % _tileUrlTemplates.Count;
             return tileId.ToUrl(_tileUrlTemplates[templateIndex]);
-        }
-
-        private static void ApplyHeaders(UnityWebRequest request, Dictionary<string, string> headers)
-        {
-            if (headers == null) return;
-            foreach (var kvp in headers)
-            {
-                if (!string.IsNullOrEmpty(kvp.Key))
-                    request.SetRequestHeader(kvp.Key, kvp.Value ?? string.Empty);
-            }
         }
 
         public void Dispose()

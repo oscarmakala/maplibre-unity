@@ -121,8 +121,12 @@ namespace MapLibre.Unity.Source
         private static string MetaPath(string key) => Path.Combine(ResolveCacheDir(), key + ".meta");
 
         /// <summary>
-        /// Lookup result for <see cref="GetAsync"/>. Pre-allocated by the caller
-        /// so the coroutine can mutate it in place without allocating closures.
+        /// Lookup result for <see cref="GetAsync"/>. Allocated by the caller
+        /// so the coroutine can mutate it in place without allocating a
+        /// closure. Each in-flight fetch needs its own instance — multiple
+        /// concurrent <see cref="GetAsync"/> calls (e.g. several tiles in
+        /// the same source) cannot share one because the WebGL polling loop
+        /// writes the result back into this same object.
         /// </summary>
         public class LookupResult
         {
@@ -303,8 +307,12 @@ namespace MapLibre.Unity.Source
         /// <summary>
         /// Refresh the cached entry's freshness timestamp after a successful 304
         /// revalidation (server confirmed the cached body is still current).
+        /// <paramref name="etag"/> is the value of the ETag response header
+        /// returned with the 304 -- some servers do rotate it on revalidation,
+        /// so we forward the new value when present and leave the existing
+        /// ETag in place when null.
         /// </summary>
-        public static void Touch(string url, string cacheControlHeader)
+        public static void Touch(string url, string etag, string cacheControlHeader)
         {
             if (!Enabled) return;
             int maxAge = ParseMaxAge(cacheControlHeader);
@@ -312,12 +320,14 @@ namespace MapLibre.Unity.Source
             string key = KeyFor(url);
 
 #if UNITY_WEBGL && !UNITY_EDITOR
-            // The JS bridge looks up the existing record by key and rewrites
-            // its meta JSON. We pass a fresh meta envelope; the bridge merges
-            // it onto the live row (preserving the stored body bytes).
+            // The JS bridge merges these fields onto the existing record so
+            // the stored body, ByteLength, and (when null) the ETag are all
+            // preserved. Passing an ETag here only overrides the existing
+            // one; passing null leaves the prior ETag intact.
             var meta = new CacheEntry
             {
                 Url = url,
+                ETag = etag,
                 FetchedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 MaxAgeSeconds = maxAge,
             };
@@ -331,6 +341,7 @@ namespace MapLibre.Unity.Source
                 if (meta == null) return;
                 meta.FetchedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 meta.MaxAgeSeconds = maxAge;
+                if (!string.IsNullOrEmpty(etag)) meta.ETag = etag;
                 File.WriteAllText(metaPath, JsonConvert.SerializeObject(meta));
             }
             catch (Exception e)

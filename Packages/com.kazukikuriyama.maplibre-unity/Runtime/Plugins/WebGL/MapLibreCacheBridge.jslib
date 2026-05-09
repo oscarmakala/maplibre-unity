@@ -44,6 +44,9 @@ mergeInto(LibraryManager.library, {
         // Throttle eviction: only rescan once per N puts.
         putsSinceEvict: 0,
         evictPutInterval: 50,
+        // Lazy-init UTF-8 encoder. TextEncoder is universally available in
+        // every browser that supports WebAssembly.
+        utf8: { encode: function (s) { return new TextEncoder().encode(s); } },
 
         ensureOpen: function () {
             if (MLCache.opening) return MLCache.opening;
@@ -214,15 +217,23 @@ mergeInto(LibraryManager.library, {
     MapLibreCache_GetResultMetaJsonLength: function (id) {
         var req = MLCache.requests[id];
         if (!req || !req.meta) return 0;
-        return lengthBytesUTF8(req.meta);
+        // Encode once and cache the bytes so CopyResultMetaJson can do a
+        // straight HEAPU8.set without re-running TextEncoder. We avoid
+        // stringToUTF8 here because it always writes a trailing NUL, which
+        // makes the C# buffer sizing ambiguous (the previous `dstCapacity+1`
+        // call wrote one byte past the C# allocation).
+        if (!req.metaBytes) {
+            req.metaBytes = MLCache.utf8.encode(req.meta);
+        }
+        return req.metaBytes.length;
     },
 
     MapLibreCache_CopyResultMetaJson__deps: ['$MLCache'],
     MapLibreCache_CopyResultMetaJson: function (id, dstPtr, dstCapacity) {
         var req = MLCache.requests[id];
-        if (!req || !req.meta) return;
-        // +1 for trailing NUL inside stringToUTF8.
-        stringToUTF8(req.meta, dstPtr, dstCapacity + 1);
+        if (!req || !req.metaBytes) return;
+        var n = req.metaBytes.length < dstCapacity ? req.metaBytes.length : dstCapacity;
+        HEAPU8.set(req.metaBytes.subarray(0, n), dstPtr);
     },
 
     MapLibreCache_ReleaseRequest__deps: ['$MLCache'],
@@ -286,7 +297,26 @@ mergeInto(LibraryManager.library, {
             getReq.onsuccess = function () {
                 var rec = getReq.result;
                 if (!rec) return;
-                rec.meta = meta;
+                // Merge: the caller only knows the freshness window (and
+                // possibly a refreshed ETag). Preserve every other field on
+                // the existing meta so subsequent revalidation can still
+                // send If-None-Match. Falling back to wholesale replacement
+                // when either side fails to parse keeps us no worse than
+                // the previous behaviour.
+                var prev = null, next = null;
+                try { prev = rec.meta ? JSON.parse(rec.meta) : null; } catch (_) { }
+                try { next = meta ? JSON.parse(meta) : null; } catch (_) { }
+                if (prev && next) {
+                    if (typeof next.FetchedAtUnixSeconds === 'number')
+                        prev.FetchedAtUnixSeconds = next.FetchedAtUnixSeconds;
+                    if (typeof next.MaxAgeSeconds === 'number')
+                        prev.MaxAgeSeconds = next.MaxAgeSeconds;
+                    if (typeof next.ETag === 'string' && next.ETag.length > 0)
+                        prev.ETag = next.ETag;
+                    rec.meta = JSON.stringify(prev);
+                } else {
+                    rec.meta = meta;
+                }
                 rec.lastAccess = Math.floor(Date.now() / 1000);
                 store.put(rec);
             };
