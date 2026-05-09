@@ -4,11 +4,10 @@
 
 # MapLibre Unity
 
-A pure-C# port of [MapLibre GL JS](https://maplibre.org/) for the Unity
-game engine. No native (C/C++) plugins — every layer of the pipeline
-runs on the managed runtime. The single exception is a small WebGL
-JSLib (`MapLibreCacheBridge.jslib`) that brokers asynchronous IndexedDB
-calls for the on-disk tile cache; it is unused on every other platform.
+A Unity port of [MapLibre GL JS](https://maplibre.org/) — render
+raster and vector tiles, run the MapLibre style spec, and use the same
+camera-control API surface (`easeTo`, `flyTo`, `fitBounds`,
+`queryRenderedFeatures`, …) inside any Unity scene.
 
 **[▶ Live WebGL demo](https://kazukikuriyama.github.io/maplibre-unity/)**
 — browse every bundled sample scene in the browser. Re-deployed
