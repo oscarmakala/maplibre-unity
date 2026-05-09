@@ -8,6 +8,24 @@ once 1.0 is cut. The history here is curated from commit messages — see
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-09
+
+最初の安定リリース。ここから [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+を厳格に適用する。0.5.0 と機能差はなく、0.x 期間を経て公開 API が落ち着いた
+ことを示すマイルストーン。今後の breaking change は必ず major bump を伴う。
+
+### Added
+- **HomeScene サブタイトルにバージョンを表示**。`Application.version`
+  (release.yml が tag push 時に bundleVersion をタグ値で書き換える)
+  を読み出し、Home 画面で現在のリリースを即確認できるように。
+
+### Documentation
+- **Symbol レイヤーの TextMeshPro 必須記述を是正**。`glyphs` URL を持つ
+  スタイルは SDF glyph パイプラインで描画され `TMP_FontAsset` /
+  TMP Essential Resources を必要としない。Requirements 節と Text /
+  Fonts 節を SDF パス（推奨）と TMP フォールバックの 2 パス構成として
+  書き直した。
+
 ## [0.5.0] - 2026-05-09
 
 ### Added
