@@ -4,10 +4,7 @@
 
 # MapLibre Unity
 
-A Unity port of [MapLibre GL JS](https://maplibre.org/) — render
-raster and vector tiles, run the MapLibre style spec, and use the same
-camera-control API surface (`easeTo`, `flyTo`, `fitBounds`,
-`queryRenderedFeatures`, …) inside any Unity scene.
+A Unity port of [MapLibre GL JS](https://maplibre.org/).
 
 **[▶ Live WebGL demo](https://kazukikuriyama.github.io/maplibre-unity/)**
 — browse every bundled sample scene in the browser. Re-deployed
