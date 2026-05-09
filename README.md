@@ -156,7 +156,16 @@ Circle / FillExtrusion), Heatmap, and Symbol / SDF text all render on
 WebGL Player builds verified by the maintainer. Tiles persist across
 page reloads via an IndexedDB bridge. WebGL Player has no OS font
 enumeration, so CJK / emoji labels need a `TMP_FontAsset` wired to
-`MapLibreMap > Text > Symbol Font` — see
+`MapLibreMap > Text > Symbol Font`.
+
+Performance is **noticeably lower than native builds**. WebGL Player is
+single-threaded, so vector tile parsing runs on the main thread with a
+4 ms per-frame budget (instead of `Task.Run` workers) and mesh-building
+runs inline. Pan / zoom remains smooth between tile arrivals, but heavy
+tiles — e.g. low-zoom planet vector tiles over dense regions — can
+introduce short frame stalls during initial load, and overall wall-clock
+load times are longer than on Standalone. WASM execution adds a further
+~1.5–2× CPU overhead vs. native managed code. See
 [Documentation~/Architecture.md](Documentation~/Architecture.md#webgl-implementation-notes)
 for the full set of WebGL adaptations.
 
