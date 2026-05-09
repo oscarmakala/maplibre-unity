@@ -263,7 +263,7 @@ Full license text: https://openfontlicense.org/
 
 ### Font Setup
 
-**Automatic (recommended):** Use the **MapLibre > Font Setup** menu in the Unity Editor.
+**Automatic (recommended):** Use the **MapLibreUnity > Font Setup** menu in the Unity Editor.
 This generates a TMP_FontAsset from OS system fonts and auto-assigns it to MapLibreMap.
 
 **Manual:** If you prefer to use a specific font file:
@@ -286,7 +286,7 @@ can test without configuring a font first.
 > The runtime fallback depends on fonts being installed on the end user's machine.
 > For reliable text display in a distributed app:
 >
-> 1. Use **MapLibre > Font Setup** to generate a font asset, or
+> 1. Use **MapLibreUnity > Font Setup** to generate a font asset, or
 > 2. Import an OFL-licensed font (e.g. Noto Sans JP) and create a TMP_FontAsset manually
 >
 > Then assign it to `MapLibreMap > Text > Symbol Font`.

@@ -25,13 +25,29 @@ namespace MapLibre.Unity.Editor
             // Defer to delayCall so the AssetDatabase is fully ready -- on the
             // first Editor open after a fresh package install, FindAssets
             // returns 0 hits if called from the static ctor directly.
-            EditorApplication.delayCall += Register;
+            EditorApplication.delayCall += () => Register(verbose: false);
         }
 
-        private static void Register()
+        // Manual entry point. Use when you suspect the auto-registration was
+        // skipped (e.g. shaders edited while Editor was closed) or just want
+        // to confirm the list is up-to-date without diffing the YAML.
+        [MenuItem("MapLibreUnity/Register Always Included Shaders")]
+        internal static void RegisterFromMenu()
+        {
+            Register(verbose: true);
+        }
+
+        private static void Register(bool verbose)
         {
             var packagedShaders = LoadPackagedShaders();
-            if (packagedShaders.Count == 0) return;
+            if (packagedShaders.Count == 0)
+            {
+                if (verbose)
+                    Debug.LogWarning("[MapLibre Unity] No shaders found under " +
+                                     $"'{PackageShadersPath}'. Is the package " +
+                                     "installed correctly?");
+                return;
+            }
 
             var graphicsSettings = GraphicsSettings.GetGraphicsSettings();
             var so = new SerializedObject(graphicsSettings);
@@ -56,7 +72,16 @@ namespace MapLibre.Unity.Editor
                 added++;
             }
 
-            if (added == 0) return;
+            if (added == 0)
+            {
+                if (verbose)
+                    Debug.Log("[MapLibre Unity] All " +
+                              $"{packagedShaders.Count} package shader(s) are " +
+                              "already registered in Project Settings → " +
+                              "Graphics → Always Included Shaders.");
+                return;
+            }
+
             so.ApplyModifiedProperties();
             AssetDatabase.SaveAssets();
             Debug.Log($"[MapLibre Unity] Registered {added} shader(s) to " +

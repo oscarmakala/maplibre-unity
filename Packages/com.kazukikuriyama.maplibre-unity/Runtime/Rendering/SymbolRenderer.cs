@@ -338,7 +338,7 @@ namespace MapLibre.Unity.Rendering
         private static void LogFontWarning()
         {
             Debug.LogWarning("[MapLibre] No Symbol Font assigned and no suitable OS font found. " +
-                             "CJK text may not render correctly. Use MapLibre > Font Setup or assign a TMP_FontAsset in MapLibreMap > Text > Symbol Font.");
+                             "CJK text may not render correctly. Use MapLibreUnity > Font Setup or assign a TMP_FontAsset in MapLibreMap > Text > Symbol Font.");
         }
 
         /// <summary>

@@ -8,7 +8,7 @@ namespace MapLibre.Unity.Editor
 {
     /// <summary>
     /// Editor window for setting up a TMP_FontAsset from OS system fonts.
-    /// Accessed via MapLibre > Font Setup.
+    /// Accessed via MapLibreUnity > Font Setup.
     /// </summary>
     public class FontSetupWindow : EditorWindow
     {
@@ -31,7 +31,7 @@ namespace MapLibre.Unity.Editor
             "IPAex", "IPAmj", "Klee", "Tsukushi", "Toppan",
         };
 
-        [MenuItem("MapLibre/Font Setup")]
+        [MenuItem("MapLibreUnity/Font Setup")]
         public static void ShowWindow()
         {
             var window = GetWindow<FontSetupWindow>("MapLibre Font Setup");

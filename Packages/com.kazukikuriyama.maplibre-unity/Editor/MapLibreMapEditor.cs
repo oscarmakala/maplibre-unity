@@ -166,7 +166,7 @@ namespace MapLibre.Unity.Editor
 
             // --- Text ---
             EditorGUILayout.LabelField("Text (all Optional)", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_symbolFont, new GUIContent("Symbol Font (Optional)", "TMP_FontAsset for map labels. Falls back to the TMP default when unset. Use MapLibre > Font Setup to generate."));
+            EditorGUILayout.PropertyField(_symbolFont, new GUIContent("Symbol Font (Optional)", "TMP_FontAsset for map labels. Falls back to the TMP default when unset. Use MapLibreUnity > Font Setup to generate."));
 
             serializedObject.ApplyModifiedProperties();
         }

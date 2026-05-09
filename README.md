@@ -204,6 +204,28 @@ Project window — no import step is required. Open
 `Packages/MapLibre Unity/Samples/Home/HomeScene.unity` to launch the
 demo browser.
 
+### Shader registration (automatic)
+
+Every layer's material is created at runtime via `Shader.Find("MapLibre/...")`,
+so the package's shaders must live in **Project Settings → Graphics →
+Always Included Shaders** to survive build stripping. This list is
+populated automatically: an `[InitializeOnLoad]` Editor hook
+(`AlwaysIncludedShadersRegistration`) scans
+`Packages/com.kazukikuriyama.maplibre-unity/Shaders/` on first Editor
+load after install and appends any missing entries to your project's
+`GraphicsSettings.asset`. Existing entries are preserved and re-runs
+are a no-op, so no manual Project Settings edits are required. If you
+ever need to verify the result, open
+**Edit → Project Settings → Graphics** and scroll to *Always Included
+Shaders* — every `MapLibre/*` shader should be listed.
+
+If a registration ever needs to be re-run manually (for example after
+a shader file was added while the Editor was closed, or to confirm the
+list is in sync), invoke **MapLibreUnity → Register Always Included
+Shaders** from the menu bar. The result is reported in the Console:
+either `Registered N shader(s)` or `All N package shader(s) are
+already registered`.
+
 ## Quick Start
 
 1. Open this project (or any project that has installed the package)
@@ -338,7 +360,7 @@ Symbol layer text labels use TextMeshPro (SDF).
 
 ### Automatic setup (recommended)
 
-Open the **MapLibre > Font Setup** menu to auto-generate a `TMP_FontAsset` from a font installed on the OS and assign it to `MapLibreMap` in the scene.
+Open the **MapLibreUnity > Font Setup** menu to auto-generate a `TMP_FontAsset` from a font installed on the OS and assign it to `MapLibreMap` in the scene.
 
 ### Fallback behavior (development only)
 
@@ -351,7 +373,7 @@ This works the same way as Word or a web browser rendering text using OS fonts �
 > This fallback only works when the target OS has the required fonts installed.
 > When shipping an app, explicitly configure a font using one of:
 >
-> 1. Generate and assign a font asset via **MapLibre > Font Setup**
+> 1. Generate and assign a font asset via **MapLibreUnity > Font Setup**
 > 2. Include an OFL-licensed font (e.g. Noto Sans JP) in the project and assign it manually
 >
 > If you bundle a font file, make sure its license allows redistribution.

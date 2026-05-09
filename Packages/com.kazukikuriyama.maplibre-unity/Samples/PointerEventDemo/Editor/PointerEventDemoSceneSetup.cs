@@ -8,11 +8,11 @@ namespace MapLibre.Unity.Samples.PointerEventDemoEditor
 {
     /// <summary>
     /// Editor utility to create the PointerEventDemo scene.
-    /// Menu: MapLibre > Samples > Create Pointer Event Demo Scene
+    /// Menu: MapLibreUnity > Samples > Create Pointer Event Demo Scene
     /// </summary>
     public static class PointerEventDemoSceneSetup
     {
-        [MenuItem("MapLibre/Samples/Create Pointer Event Demo Scene")]
+        [MenuItem("MapLibreUnity/Samples/Create Pointer Event Demo Scene")]
         public static void CreateScene()
         {
             // Create new scene

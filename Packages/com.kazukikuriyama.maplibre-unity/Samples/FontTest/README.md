@@ -18,7 +18,7 @@ Sample for verifying TextMeshPro (SDF) text label rendering, including non-Latin
 ### Option A: Auto setup (recommended)
 
 1. Open `FontTestScene.unity`
-2. Run **MapLibre > Font Setup** from the menu
+2. Run **MapLibreUnity > Font Setup** from the menu
 3. Pick a font from the CJK font list and click **Generate Font Asset & Apply**
 4. Press Play
 
