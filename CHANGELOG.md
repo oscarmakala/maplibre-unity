@@ -8,6 +8,71 @@ once 1.0 is cut. The history here is curated from commit messages — see
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-09
+
+### Added
+- **WebGL Player: persistent tile / glyph cache via IndexedDB**.
+  `TileDiskCache` and `GlyphSource` now route through
+  `Plugins/WebGL/MapLibreCacheBridge.jslib`, an async IndexedDB bridge.
+  Cached tile bytes, sprite sheets, and glyph PBFs survive page reloads,
+  honour `Cache-Control` / `ETag`, and share LRU eviction with native
+  builds. The previous WebGL-disabled disk-cache path (synchronous
+  `File.*` against IDBFS would block on IndexedDB sync) is replaced with
+  proper async reads/writes.
+- **Editor menu `MapLibreUnity → Register Always Included Shaders`**.
+  `[InitializeOnLoad]` で自動実行される `AlwaysIncludedShadersRegistration`
+  を任意のタイミングで手動再実行できるよう MenuItem を追加。
+- **`TileSourceBase<TData>` / `CachedHttpFetch`** — 共通の抽象基底クラスと
+  HTTP fetch ヘルパー。RasterTileSource / VectorTileSource が継承して
+  使用。
+- **`EvaluationContext.For(...)`** 静的ファクトリ — 各 renderer から
+  `MakeContext` を呼び出すボイラープレートを削減。
+
+### Changed
+- **`TileDiskCache.Touch(url, etag, cacheControl)`** — シグネチャに
+  `etag` 引数を追加 (**breaking change**)。サーバが 304 と一緒に新しい
+  ETag を返すケースを保持するため。0.4.x からの呼び出し元は `etag` 引数
+  (null 可) を追加で渡す必要あり。
+- **Exception 型の具体化** — 7 箇所の `throw new Exception(...)` を意味
+  のある型に置換: transformer abort → `OperationCanceledException`、
+  HTTP 失敗 → `System.Net.Http.HttpRequestException`、TileJSON parse
+  失敗 → `System.IO.InvalidDataException`。catch 側で型分岐が可能に。
+- **TileSource の queue / dedup / dispatch / cancel を共通化**。
+  `RasterTileSource` / `VectorTileSource` を `TileSourceBase<TData>`
+  継承に変更し、約 240 行の重複コードを削減。
+- **5 renderer の `MakeContext` を削除**。Circle / Heatmap /
+  FillExtrusion / VectorTile / Symbol が `EvaluationContext.For(...)`
+  ファクトリ経由に統一。
+
+### Fixed
+- **WebGL: `Touch` が ETag を消し以後の 304 revalidation が壊れる問題**。
+  `MapLibreCacheBridge.jslib` の Touch ハンドラで既存 meta JSON をパース
+  し時刻フィールドのみマージするよう修正。
+- **WebGL: `MapLibreCache_CopyResultMetaJson` の 1 バイト OOB 書き込み**。
+  `stringToUTF8(..., dstCapacity + 1)` が C# 側のバッファに対して 1
+  バイト範囲外書き込みをしていた。`metaBytes` を遅延キャッシュして
+  `HEAPU8.set` で生バイト書き込みに変更。
+- **VectorTileSource の external-dispose 経路で `_activeRequests--` が
+  抜けていたリーク**。
+
+### Removed
+- **PointerEventDemo の不要な Editor scene-setup utility**
+  (`Samples/PointerEventDemo/Editor/`)。同階層に既に
+  `PointerEventDemoScene.unity` が存在し、scene 作成スクリプトは
+  実行すると既存シーンを破壊的に上書きするだけで誰の役にも立っていなかった。
+  他 30+ サンプルも setup utility を持たない統一構成に。
+
+### Documentation
+- **README をユーザー向けに圧縮**。内部設計資料 (パイプライン図 / Project
+  Structure / Shader 登録の実装詳細 / WebGL 適応詳細) を
+  `Documentation~/Architecture.md` に分離。
+- **README リード文を刷新** — MapLibre とは何か + その Unity 実装である
+  立ち位置を 2 段落で説明。Unity-native コンポーネント (`PrefabSource` /
+  `MapCameraTarget` / `CameraDrivenMapState`) を冒頭で紹介。
+- **WebGL のパフォーマンス特性を README に明記** — 単一スレッド + WASM
+  オーバーヘッドで native より遅いことを Supported platforms セクションに
+  追記。
+
 ## [0.4.6] - 2026-05-09
 
 ### Fixed
