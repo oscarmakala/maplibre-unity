@@ -349,16 +349,25 @@ namespace MapLibre.Unity.Source
 
             // Disk cache lookup. A fresh hit short-circuits the HTTP request entirely;
             // a stale hit forwards the ETag in If-None-Match for revalidation.
+            // GetAsync is synchronous on native and yields a few frames on
+            // WebGL while the IndexedDB transaction settles.
             byte[] rawData = null;
+            byte[] cachedBytes = null;
             string responseCacheControl = null;
             string responseEtag = null;
             bool servedFromCache = false;
             TileDiskCache.CacheEntry cacheMeta = null;
-            if (TileDiskCache.TryGet(transformed.Url, out var cachedBytes, out cacheMeta, out var cachedFresh)
-                && cachedFresh)
+            var cacheLookup = new TileDiskCache.LookupResult();
+            yield return TileDiskCache.GetAsync(transformed.Url, cacheLookup);
+            if (cacheLookup.Hit)
             {
-                rawData = cachedBytes;
-                servedFromCache = true;
+                cachedBytes = cacheLookup.Data;
+                cacheMeta = cacheLookup.Meta;
+                if (cacheLookup.IsFresh)
+                {
+                    rawData = cachedBytes;
+                    servedFromCache = true;
+                }
             }
 
             UnityWebRequest request = null;

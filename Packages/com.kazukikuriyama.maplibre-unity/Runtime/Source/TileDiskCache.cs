@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
@@ -29,18 +30,15 @@ namespace MapLibre.Unity.Source
     {
         /// <summary>
         /// Master toggle. When false, all reads return miss and writes are no-ops.
-        /// Defaults to true on platforms with a writable persistent data path,
-        /// and false on WebGL Player builds -- Application.persistentDataPath is
-        /// IDBFS-backed there, so synchronous File.* calls block on IndexedDB
-        /// sync and the cache hit rate isn't worth the freeze. WebGL users
-        /// rely on the browser's HTTP cache instead. Override at runtime if
-        /// you really want IDBFS-backed disk cache (after warming IDBFS).
+        /// Enabled on every platform: native builds use File.* under
+        /// <see cref="CacheDirectory"/>, WebGL Player builds route through the
+        /// async <c>MapLibreCacheBridge</c> (.jslib) which talks to IndexedDB.
+        /// The old WebGL-disabled default existed because synchronous File.*
+        /// against IDBFS would block on IndexedDB sync; the bridge replaces
+        /// that with proper async reads/writes so the toggle is now safe to
+        /// leave on everywhere.
         /// </summary>
-#if UNITY_WEBGL && !UNITY_EDITOR
-        public static bool Enabled { get; set; } = false;
-#else
         public static bool Enabled { get; set; } = true;
-#endif
 
         /// <summary>
         /// Where cache files live. Defaults to <c>persistentDataPath/MapLibreCache</c>.
@@ -50,9 +48,22 @@ namespace MapLibre.Unity.Source
 
         /// <summary>
         /// Soft cap on total cache size in bytes. Eviction runs on Put() when exceeded.
-        /// Default: 100 MB. Set to 0 to disable size-based eviction.
+        /// Default: 100 MB. Set to 0 to disable size-based eviction. On WebGL
+        /// the value is forwarded to the IndexedDB bridge which enforces the
+        /// same soft cap via lastAccess-ordered eviction.
         /// </summary>
-        public static long MaxBytes { get; set; } = 100L * 1024 * 1024;
+        public static long MaxBytes
+        {
+            get => _maxBytes;
+            set
+            {
+                _maxBytes = value;
+#if UNITY_WEBGL && !UNITY_EDITOR
+                if (Enabled) MapLibreCacheBridge.Init(_maxBytes);
+#endif
+            }
+        }
+        private static long _maxBytes = 100L * 1024 * 1024;
 
         /// <summary>
         /// Default time-to-live (seconds) used when a server response lacks
@@ -110,9 +121,33 @@ namespace MapLibre.Unity.Source
         private static string MetaPath(string key) => Path.Combine(ResolveCacheDir(), key + ".meta");
 
         /// <summary>
+        /// Lookup result for <see cref="GetAsync"/>. Pre-allocated by the caller
+        /// so the coroutine can mutate it in place without allocating closures.
+        /// </summary>
+        public class LookupResult
+        {
+            public bool Hit;
+            public byte[] Data;
+            public CacheEntry Meta;
+            public bool IsFresh;
+
+            public void Reset()
+            {
+                Hit = false;
+                Data = null;
+                Meta = null;
+                IsFresh = false;
+            }
+        }
+
+        /// <summary>
         /// Look up a URL. Returns true with fresh data when the cached copy is still
         /// within max-age. Even on a stale hit returns the metadata via <paramref name="meta"/>
         /// so callers can perform conditional revalidation (If-None-Match).
+        ///
+        /// Synchronous variant -- works on every platform except WebGL Player
+        /// builds, where IndexedDB is async and this method always returns false.
+        /// Use <see cref="GetAsync"/> for code paths that must work on WebGL too.
         /// </summary>
         public static bool TryGet(string url, out byte[] data, out CacheEntry meta, out bool isFresh)
         {
@@ -121,6 +156,12 @@ namespace MapLibre.Unity.Source
             isFresh = false;
             if (!Enabled) return false;
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // IndexedDB reads can't be exposed synchronously without blocking
+            // the main thread on a JS event loop turn. Force callers onto the
+            // async API instead.
+            return false;
+#else
             string key = KeyFor(url);
             string dataPath = DataPath(key);
             string metaPath = MetaPath(key);
@@ -142,6 +183,71 @@ namespace MapLibre.Unity.Source
                 Debug.LogWarning($"[TileDiskCache] Read failed for {url}: {e.Message}");
                 return false;
             }
+#endif
+        }
+
+        /// <summary>
+        /// Coroutine-friendly lookup. On native platforms this completes in a
+        /// single iteration via the synchronous <see cref="TryGet"/> path; on
+        /// WebGL it polls <c>MapLibreCacheBridge</c> until the IndexedDB
+        /// transaction settles (yielding null between polls so the frame
+        /// budget isn't exceeded). The result is written into
+        /// <paramref name="result"/> -- callers reuse the same instance across
+        /// fetches to avoid allocating per-tile.
+        /// </summary>
+        public static IEnumerator GetAsync(string url, LookupResult result)
+        {
+            if (result == null) yield break;
+            result.Reset();
+            if (!Enabled || string.IsNullOrEmpty(url)) yield break;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            int reqId = MapLibreCacheBridge.BeginGet(KeyFor(url));
+            if (reqId <= 0) yield break;
+
+            int poll;
+            // Poll once per frame. IndexedDB resolves on microtask boundaries
+            // so a hit is typically available within 1-2 frames; a miss the
+            // same.
+            while ((poll = MapLibreCacheBridge.PollGet(reqId)) == 0)
+                yield return null;
+
+            if (poll != 2)
+            {
+                MapLibreCacheBridge.ReleaseRequest(reqId);
+                yield break;
+            }
+
+            byte[] data = MapLibreCacheBridge.CopyResultBytes(reqId);
+            string metaJson = MapLibreCacheBridge.CopyResultMetaJson(reqId);
+            MapLibreCacheBridge.ReleaseRequest(reqId);
+
+            if (data == null || data.Length == 0) yield break;
+
+            CacheEntry meta = null;
+            if (!string.IsNullOrEmpty(metaJson))
+            {
+                try { meta = JsonConvert.DeserializeObject<CacheEntry>(metaJson); }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[TileDiskCache] Bad meta JSON for {url}: {e.Message}");
+                }
+            }
+
+            result.Hit = true;
+            result.Data = data;
+            result.Meta = meta;
+            result.IsFresh = meta != null && !meta.IsExpired;
+#else
+            if (TryGet(url, out var data, out var meta, out var fresh))
+            {
+                result.Hit = true;
+                result.Data = data;
+                result.Meta = meta;
+                result.IsFresh = fresh;
+            }
+            yield break;
+#endif
         }
 
         /// <summary>
@@ -161,19 +267,28 @@ namespace MapLibre.Unity.Source
                 return;
             if (maxAge < 0) maxAge = DefaultMaxAgeSeconds;
 
+            var meta = new CacheEntry
+            {
+                Url = url,
+                ETag = etag,
+                FetchedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                MaxAgeSeconds = maxAge,
+                ByteLength = data.LongLength,
+            };
             string key = KeyFor(url);
+            string metaJson = JsonConvert.SerializeObject(meta);
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // Fire-and-forget: the JS bridge writes to IndexedDB asynchronously.
+            // We can't await completion here because we're not in a coroutine,
+            // but the caller already has the bytes in memory and a write
+            // failure just means the next session re-fetches.
+            MapLibreCacheBridge.Put(key, url, data, metaJson);
+#else
             try
             {
                 File.WriteAllBytes(DataPath(key), data);
-                var meta = new CacheEntry
-                {
-                    Url = url,
-                    ETag = etag,
-                    FetchedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    MaxAgeSeconds = maxAge,
-                    ByteLength = data.LongLength,
-                };
-                File.WriteAllText(MetaPath(key), JsonConvert.SerializeObject(meta));
+                File.WriteAllText(MetaPath(key), metaJson);
             }
             catch (Exception e)
             {
@@ -182,6 +297,7 @@ namespace MapLibre.Unity.Source
             }
 
             if (MaxBytes > 0) EvictIfOverCap();
+#endif
         }
 
         /// <summary>
@@ -191,15 +307,28 @@ namespace MapLibre.Unity.Source
         public static void Touch(string url, string cacheControlHeader)
         {
             if (!Enabled) return;
+            int maxAge = ParseMaxAge(cacheControlHeader);
+            if (maxAge < 0) maxAge = DefaultMaxAgeSeconds;
             string key = KeyFor(url);
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // The JS bridge looks up the existing record by key and rewrites
+            // its meta JSON. We pass a fresh meta envelope; the bridge merges
+            // it onto the live row (preserving the stored body bytes).
+            var meta = new CacheEntry
+            {
+                Url = url,
+                FetchedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                MaxAgeSeconds = maxAge,
+            };
+            MapLibreCacheBridge.Touch(key, JsonConvert.SerializeObject(meta));
+#else
             string metaPath = MetaPath(key);
             try
             {
                 if (!File.Exists(metaPath)) return;
                 var meta = JsonConvert.DeserializeObject<CacheEntry>(File.ReadAllText(metaPath));
                 if (meta == null) return;
-                int maxAge = ParseMaxAge(cacheControlHeader);
-                if (maxAge < 0) maxAge = DefaultMaxAgeSeconds;
                 meta.FetchedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 meta.MaxAgeSeconds = maxAge;
                 File.WriteAllText(metaPath, JsonConvert.SerializeObject(meta));
@@ -208,12 +337,16 @@ namespace MapLibre.Unity.Source
             {
                 Debug.LogWarning($"[TileDiskCache] Touch failed for {url}: {e.Message}");
             }
+#endif
         }
 
         /// <summary>Wipe the entire cache directory.</summary>
         public static void Clear()
         {
             if (!Enabled) return;
+#if UNITY_WEBGL && !UNITY_EDITOR
+            MapLibreCacheBridge.Clear();
+#else
             try
             {
                 string dir = ResolveCacheDir();
@@ -227,12 +360,20 @@ namespace MapLibre.Unity.Source
             {
                 Debug.LogWarning($"[TileDiskCache] Clear failed: {e.Message}");
             }
+#endif
         }
 
-        /// <summary>Approximate total size of cached responses in bytes.</summary>
+        /// <summary>
+        /// Approximate total size of cached responses in bytes. On WebGL this
+        /// returns 0 -- IndexedDB cursor scans are async; use
+        /// <see cref="GetSizeAsync"/> there if you need an accurate number.
+        /// </summary>
         public static long GetSize()
         {
             if (!Enabled) return 0;
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return 0;
+#else
             try
             {
                 string dir = ResolveCacheDir();
@@ -243,6 +384,30 @@ namespace MapLibre.Unity.Source
                 return total;
             }
             catch { return 0; }
+#endif
+        }
+
+        /// <summary>
+        /// Coroutine variant of <see cref="GetSize"/> that works on WebGL by
+        /// awaiting an IndexedDB cursor scan via the bridge. <paramref name="onResult"/>
+        /// receives the byte total once the scan completes.
+        /// </summary>
+        public static IEnumerator GetSizeAsync(Action<long> onResult)
+        {
+            if (!Enabled) { onResult?.Invoke(0); yield break; }
+#if UNITY_WEBGL && !UNITY_EDITOR
+            int reqId = MapLibreCacheBridge.BeginGetSize();
+            if (reqId <= 0) { onResult?.Invoke(0); yield break; }
+            int poll;
+            while ((poll = MapLibreCacheBridge.PollGet(reqId)) == 0)
+                yield return null;
+            long size = (poll == 2) ? MapLibreCacheBridge.GetSizeResult(reqId) : 0;
+            MapLibreCacheBridge.ReleaseRequest(reqId);
+            onResult?.Invoke(size);
+#else
+            onResult?.Invoke(GetSize());
+            yield break;
+#endif
         }
 
         private static void EvictIfOverCap()

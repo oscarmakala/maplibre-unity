@@ -2,7 +2,7 @@
   "name": "com.kazukikuriyama.maplibre-unity",
   "version": "0.4.6",
   "displayName": "MapLibre Unity",
-  "description": "MapLibre GL JS port for Unity, written in pure C# with no native plugins. Renders raster and vector tiles with full MapLibre Style Spec support (paint/layout properties, expressions, zoom functions, filters, symbols, camera animations).",
+  "description": "MapLibre GL JS port for Unity, written in pure C# with no native C/C++ plugins (a single ~250-line WebGL JSLib bridges IndexedDB for the on-disk tile cache). Renders raster and vector tiles with full MapLibre Style Spec support (paint/layout properties, expressions, zoom functions, filters, symbols, camera animations).",
   "unity": "6000.3",
   "author": {
     "name": "Kazuki Kuriyama",

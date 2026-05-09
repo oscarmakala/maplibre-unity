@@ -5,8 +5,10 @@
 # MapLibre Unity
 
 A pure-C# port of [MapLibre GL JS](https://maplibre.org/) for the Unity
-game engine. No native plugins — every layer of the pipeline runs on the
-managed runtime.
+game engine. No native (C/C++) plugins — every layer of the pipeline
+runs on the managed runtime. The single exception is a small WebGL
+JSLib (`MapLibreCacheBridge.jslib`) that brokers asynchronous IndexedDB
+calls for the on-disk tile cache; it is unused on every other platform.
 
 **[▶ Live WebGL demo](https://kazukikuriyama.github.io/maplibre-unity/)**
 — browse every bundled sample scene in the browser. Re-deployed
@@ -119,8 +121,8 @@ Comparison against MapLibre Native (C++) and MapLibre GL JS (Web).
 |---|:---:|:---:|:---:|
 | GPU backend | OpenGL / Metal / Vulkan | WebGL 1/2 | Unity URP (incl. WebGL 2) |
 | Vector tile processing | worker threads | Web Worker | `Task.Run` (background thread); coroutine + `ParseLazy` on WebGL Player |
-| Tile cache | ✅ | ✅ | ✅ (LRU + disk cache) |
-| Native plugins | — | — | none (pure C#) |
+| Tile cache | ✅ | ✅ | ✅ (LRU + disk cache; IndexedDB on WebGL) |
+| Native plugins | — | — | pure C#, plus one ~250-line JSLib on WebGL only (IndexedDB bridge) |
 | feature-state thread safety | ✅ | ✅ | ✅ (`ConcurrentDictionary`) |
 
 ## Requirements
@@ -147,10 +149,17 @@ Circle / FillExtrusion), Heatmap, and Symbol / SDF text all render
 on WebGL Player builds verified by the maintainer. Threading and
 filesystem behaviour is adapted under `#if UNITY_WEBGL` guards:
 
-- The disk caches (`TileDiskCache`, `GlyphSource`) are disabled —
-  `Application.persistentDataPath` is IDBFS-backed on WebGL and
-  synchronous `File.*` calls block on IndexedDB sync. The browser's
-  HTTP cache covers the same ground for free.
+- The disk caches (`TileDiskCache`, `GlyphSource`) persist via
+  IndexedDB through a small JSLib bridge
+  (`Plugins/WebGL/MapLibreCacheBridge.jslib`). The native side does
+  not call `Application.persistentDataPath` on WebGL — that path is
+  IDBFS-backed and every `File.*` call blocks on IndexedDB sync —
+  so reads/writes go straight to IndexedDB asynchronously and the
+  C# coroutine yields one or two frames per lookup. Cached tiles,
+  sprite sheets, and glyph PBFs survive page reloads, honour
+  `Cache-Control` / `ETag`, and share the same LRU eviction logic
+  as native builds. The browser's HTTP cache continues to layer on
+  top of this for free.
 - `Task.Run` callsites go through `BackgroundTask.Run`, which on
   WebGL Player invokes the body inline (no real worker thread) and
   returns a pre-completed task so the existing polling pattern

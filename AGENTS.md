@@ -8,8 +8,12 @@ to keep older Claude-only setups working.)
 
 ## Project Overview
 
-A Unity port of MapLibre GL JS. Pure C# implementation (no native plugins),
-targeting full MapLibre Style Spec compliance.
+A Unity port of MapLibre GL JS. Pure C# implementation (no native C/C++
+plugins), targeting full MapLibre Style Spec compliance. The single
+documented exception is `Runtime/Plugins/WebGL/MapLibreCacheBridge.jslib`,
+a small JS bridge that lets `TileDiskCache` and `GlyphSource` use
+IndexedDB asynchronously on WebGL Player builds (synchronous `File.*`
+against IDBFS would block on every read/write).
 
 ## Tech Stack
 
@@ -48,10 +52,15 @@ Packages/com.kazukikuriyama.maplibre-unity/
                   GeoJsonSource, GeoJsonToVectorTile, ImageSource,
                   ICustomRasterSource, ICustomVectorSource,
                   TileCache, VectorTileCache, TileDiskCache,
+                  MapLibreCacheBridge (WebGL IndexedDB stub),
                   HttpRetryPolicy, TransformRequest, SpriteLoader,
                   SuperclusterLite, GlyphSource, GlyphAtlas,
                   GlyphPbfParser, AwaitableExtensions,
                   PMTiles/, MBTiles/
+    Plugins/
+      WebGL/      MapLibreCacheBridge.jslib (async IndexedDB
+                  bridge for TileDiskCache; sole non-managed
+                  artefact in the package)
     Rendering/    ILayerRenderer, MapRenderer, RasterTileRenderer,
                   VectorTileRenderer, BackgroundRenderer,
                   CircleRenderer, FillExtrusionRenderer,
@@ -142,7 +151,13 @@ Packages/com.kazukikuriyama.maplibre-unity/
 - Use existing namespace conventions.
 - Follow MapLibre Style Spec naming where applicable (e.g., property
   names match the spec).
-- No native plugins — pure C# only.
+- No native C/C++ plugins — pure C# only. The sole accepted exception
+  is `Runtime/Plugins/WebGL/MapLibreCacheBridge.jslib`, an async
+  IndexedDB bridge required because WebGL's IDBFS-backed
+  `Application.persistentDataPath` blocks on synchronous `File.*`
+  calls. Do not introduce additional JSLibs / DLLs / .so / .dylib /
+  .bundle files without raising the design first; a JSLib added
+  thoughtlessly will be rejected in review.
 - URP-compatible shaders only (use `"RenderPipeline"="UniversalPipeline"`
   tag).
 - **Documentation language**: All repository-facing documentation must
@@ -257,9 +272,12 @@ standards without needing to be asked:
     `IEnumerable`) alongside the eager `Parse` so the WebGL coroutine
     path can yield to the main loop with a per-frame budget. See
     `VectorTileParser` + `VectorTileSource.ParseTileBytesIncremental`.
-  - Disk caching: skip on WebGL (`TileDiskCache.Enabled = false`,
-    `GlyphSource._diskCacheDir = null`). The browser HTTP cache is the
-    fallback.
+  - Disk caching: routed through `MapLibreCacheBridge` (.jslib) on
+    WebGL so reads/writes hit IndexedDB asynchronously instead of
+    blocking on synchronous IDBFS-backed `File.*`. Coroutine
+    callers use `TileDiskCache.GetAsync(url, LookupResult)`; sync
+    `TryGet` returns false on WebGL. `Put` / `Touch` / `Clear`
+    fan out to the bridge automatically.
   - OS font enumeration: WebGL has no `Font.GetPathsToOSFonts`; route
     through `SystemFontFallback.Resolve`, which returns
     `Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf")` on WebGL.
