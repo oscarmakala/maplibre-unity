@@ -184,7 +184,7 @@ namespace MapLibre.Unity
 
             var transformed = RequestTransformer.Apply(TransformRequest, url, ResourceKind.Image);
             if (transformed.Abort)
-                throw new Exception("LoadImage: aborted by transformRequest");
+                throw new OperationCanceledException("LoadImage: aborted by transformRequest");
 
             using var request = UnityWebRequestTexture.GetTexture(transformed.Url, true);
             request.SetRequestHeader("User-Agent", "MapLibre-Unity/0.1");
@@ -203,7 +203,7 @@ namespace MapLibre.Unity
             cancellationToken.ThrowIfCancellationRequested();
 
             if (request.result != UnityWebRequest.Result.Success)
-                throw new Exception($"{url}: {request.error}");
+                throw new System.Net.Http.HttpRequestException($"{url}: {request.error}");
 
             var texture = DownloadHandlerTexture.GetContent(request);
             texture.wrapMode = TextureWrapMode.Clamp;

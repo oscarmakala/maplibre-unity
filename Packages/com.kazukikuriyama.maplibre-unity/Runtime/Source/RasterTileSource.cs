@@ -3,35 +3,16 @@ using System.Collections;
 using System.Collections.Generic;
 using MapLibre.Unity.Style;
 using UnityEngine;
-using UnityEngine.Networking;
 
 namespace MapLibre.Unity.Source
 {
-    public class RasterTileSource : ISource
+    public class RasterTileSource : TileSourceBase<Texture2D>
     {
-        public string Id { get; private set; }
-        public SourceDefinition Definition { get; private set; }
-
-        private List<string> _tileUrlTemplates = new();
         private TileCache _cache;
-        private MonoBehaviour _coroutineHost;
-        private int _maxConcurrentRequests = 6;
-        private int _activeRequests;
-        private RequestTransformFunction _transformRequest;
-        private readonly Queue<TileRequest> _requestQueue = new();
-        private readonly HashSet<CanonicalTileID> _pendingRequests = new();
-        private readonly Dictionary<CanonicalTileID, UnityWebRequest> _activeWebRequests = new();
         // When non-null, ProcessQueue routes tile loads through this user-supplied
         // hook instead of the built-in URL template fetcher. Mirrors MapLibre GL JS
         // type:"custom" / dataType:"raster" sources.
         private ICustomRasterSource _customLoader;
-
-        private struct TileRequest
-        {
-            public CanonicalTileID TileId;
-            public Action<CanonicalTileID, Texture2D> OnComplete;
-            public Action<CanonicalTileID, string> OnError;
-        }
 
         public void Initialize(string id, SourceDefinition definition, MonoBehaviour coroutineHost,
             int cacheCapacity = 256, RequestTransformFunction transformRequest = null)
@@ -46,13 +27,6 @@ namespace MapLibre.Unity.Source
                 _tileUrlTemplates = new List<string>(definition.Tiles);
         }
 
-        public void SetTileUrls(List<string> urls)
-        {
-            _tileUrlTemplates = new List<string>(urls);
-        }
-
-        public bool HasTileUrls => _tileUrlTemplates.Count > 0;
-
         /// <summary>
         /// Replace the URL fetcher with a user-supplied <see cref="ICustomRasterSource"/>.
         /// All subsequent tile requests are forwarded to <c>loader.LoadTile</c> instead
@@ -62,6 +36,8 @@ namespace MapLibre.Unity.Source
         {
             _customLoader = loader;
         }
+
+        protected override bool HasCustomLoader => _customLoader != null;
 
         /// <summary>
         /// Walk parent tiles up the pyramid until a cached texture is found.
@@ -94,7 +70,6 @@ namespace MapLibre.Unity.Source
             Action<CanonicalTileID, Texture2D> onComplete,
             Action<CanonicalTileID, string> onError)
         {
-            // Check zoom bounds
             if (tileId.Z < Definition.MinZoom || tileId.Z > Definition.MaxZoom)
                 return;
 
@@ -103,71 +78,16 @@ namespace MapLibre.Unity.Source
             if (!Definition.ContainsTile(tileId))
                 return;
 
-            // Check cache
             if (_cache.TryGet(tileId, out var cached))
             {
                 onComplete?.Invoke(tileId, cached);
                 return;
             }
 
-            // Deduplication
-            if (_pendingRequests.Contains(tileId))
-                return;
-
-            _pendingRequests.Add(tileId);
-            _requestQueue.Enqueue(new TileRequest
-            {
-                TileId = tileId,
-                OnComplete = onComplete,
-                OnError = onError
-            });
-            ProcessQueue();
+            EnqueueRequest(tileId, onComplete, onError);
         }
 
-        public void CancelRequest(CanonicalTileID tileId)
-        {
-            _pendingRequests.Remove(tileId);
-            if (_activeWebRequests.TryGetValue(tileId, out var request))
-            {
-                request.Abort();
-                request.Dispose();
-                _activeWebRequests.Remove(tileId);
-                _activeRequests--;
-                ProcessQueue();
-            }
-        }
-
-        private void ProcessQueue()
-        {
-            while (_activeRequests < _maxConcurrentRequests && _requestQueue.Count > 0)
-            {
-                var req = _requestQueue.Dequeue();
-
-                // Skip if already cancelled
-                if (!_pendingRequests.Contains(req.TileId))
-                    continue;
-
-                if (_customLoader != null)
-                {
-                    _activeRequests++;
-                    DispatchCustomLoad(req);
-                    continue;
-                }
-
-                if (_tileUrlTemplates.Count == 0)
-                {
-                    req.OnError?.Invoke(req.TileId, "No tile URL templates configured");
-                    _pendingRequests.Remove(req.TileId);
-                    continue;
-                }
-
-                _activeRequests++;
-                string url = BuildTileUrl(req.TileId);
-                _coroutineHost.StartCoroutine(FetchTile(req.TileId, url, req.OnComplete, req.OnError));
-            }
-        }
-
-        private void DispatchCustomLoad(TileRequest req)
+        protected override void DispatchCustomLoad(TileRequest req)
         {
             var loader = _customLoader;
             var tileId = req.TileId;
@@ -222,7 +142,7 @@ namespace MapLibre.Unity.Source
             }
         }
 
-        private IEnumerator FetchTile(CanonicalTileID tileId, string url,
+        protected override IEnumerator FetchTile(CanonicalTileID tileId, string url,
             Action<CanonicalTileID, Texture2D> onComplete,
             Action<CanonicalTileID, string> onError)
         {
@@ -280,22 +200,9 @@ namespace MapLibre.Unity.Source
             ProcessQueue();
         }
 
-        private string BuildTileUrl(CanonicalTileID tileId)
+        public override void Dispose()
         {
-            int templateIndex = Math.Abs(tileId.GetHashCode()) % _tileUrlTemplates.Count;
-            return tileId.ToUrl(_tileUrlTemplates[templateIndex]);
-        }
-
-        public void Dispose()
-        {
-            foreach (var kvp in _activeWebRequests)
-            {
-                kvp.Value.Abort();
-                kvp.Value.Dispose();
-            }
-            _activeWebRequests.Clear();
-            _requestQueue.Clear();
-            _pendingRequests.Clear();
+            base.Dispose();
             _cache?.Clear();
         }
     }

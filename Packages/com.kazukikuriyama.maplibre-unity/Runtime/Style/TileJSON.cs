@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using MapLibre.Unity.Source;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
@@ -23,16 +24,18 @@ namespace MapLibre.Unity.Style
     public static class TileJSONFetcher
     {
         /// <summary>
-        /// Fetch and parse a TileJSON document. Returns <c>null</c> when the
-        /// request is aborted by <paramref name="transformRequest"/>. Throws
-        /// <see cref="Exception"/> on HTTP / parse failure.
+        /// Fetch and parse a TileJSON document. Throws
+        /// <see cref="OperationCanceledException"/> when the request is aborted
+        /// by <paramref name="transformRequest"/>,
+        /// <see cref="System.Net.Http.HttpRequestException"/> on HTTP failure,
+        /// and <see cref="InvalidDataException"/> on parse failure.
         /// </summary>
         public static async Awaitable<TileJSONData> FetchAsync(string url,
             RequestTransformFunction transformRequest = null)
         {
             var transformed = RequestTransformer.Apply(transformRequest, url, ResourceKind.Source);
             if (transformed.Abort)
-                throw new Exception("TileJSON request aborted by transformRequest");
+                throw new OperationCanceledException("TileJSON request aborted by transformRequest");
 
             using var request = UnityWebRequest.Get(transformed.Url);
             request.SetRequestHeader("User-Agent", "MapLibre-Unity/0.1");
@@ -41,7 +44,7 @@ namespace MapLibre.Unity.Style
             await request.SendAsync();
 
             if (request.result != UnityWebRequest.Result.Success)
-                throw new Exception(request.error);
+                throw new System.Net.Http.HttpRequestException($"{url}: {request.error}");
 
             try
             {
@@ -71,7 +74,7 @@ namespace MapLibre.Unity.Style
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to parse TileJSON: {ex.Message}", ex);
+                throw new InvalidDataException($"Failed to parse TileJSON: {ex.Message}", ex);
             }
         }
 

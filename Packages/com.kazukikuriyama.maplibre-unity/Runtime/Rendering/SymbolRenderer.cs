@@ -149,23 +149,6 @@ namespace MapLibre.Unity.Rendering
             _sdfTextShader = sdfTextShader;
         }
 
-        private EvaluationContext MakeContext(float zoom, string sourceId, string sourceLayer)
-            => new EvaluationContext(zoom)
-            {
-                SourceId = sourceId,
-                SourceLayer = sourceLayer,
-                FeatureStateStore = _featureStateStore,
-            };
-
-        private EvaluationContext MakeContext(float zoom, string sourceId, string sourceLayer,
-            VectorTileFeature feature)
-            => new EvaluationContext(zoom, feature)
-            {
-                SourceId = sourceId,
-                SourceLayer = sourceLayer,
-                FeatureStateStore = _featureStateStore,
-            };
-
         public SymbolRenderer(Transform parent, int layerOrder = 0, int maxLabelsPerTile = 50,
             TMP_FontAsset fontAsset = null, SpriteAtlas spriteAtlas = null, Material iconMaterial = null,
             TMP_FontAsset[] fontFallbacks = null)
@@ -401,7 +384,7 @@ namespace MapLibre.Unity.Rendering
 
             var layoutProps = StyleParser.ParseSymbolLayout(layerDef.Layout);
             var paintProps = StyleParser.ParseSymbolPaint(layerDef.Paint);
-            var ctx = MakeContext(zoom, layerDef.Source, layerDef.SourceLayer);
+            var ctx = EvaluationContext.For(zoom, layerDef.Source, layerDef.SourceLayer, _featureStateStore);
 
             // Branch on symbol-placement
             if (layoutProps.SymbolPlacement == "line")
@@ -462,7 +445,7 @@ namespace MapLibre.Unity.Rendering
             {
                 if (count >= _maxLabelsPerTile) break;
 
-                var featureCtx = MakeContext(zoom, layerDef.Source, layerDef.SourceLayer, feature);
+                var featureCtx = EvaluationContext.For(zoom, layerDef.Source, layerDef.SourceLayer, _featureStateStore, feature);
 
                 // Per-feature collision metadata
                 float textPadding = layoutProps.ResolveTextPadding(featureCtx);
@@ -629,7 +612,7 @@ namespace MapLibre.Unity.Rendering
 
                 if (filter != null)
                 {
-                    var ctx = MakeContext(zoom, sourceId, sourceLayer, feature);
+                    var ctx = EvaluationContext.For(zoom, sourceId, sourceLayer, _featureStateStore, feature);
                     if (!filter.EvaluateBool(ctx)) continue;
                 }
 

@@ -46,23 +46,6 @@ namespace MapLibre.Unity.Rendering
         private IFeatureStateStore _featureStateStore;
         public void SetFeatureStateStore(IFeatureStateStore store) => _featureStateStore = store;
 
-        private EvaluationContext MakeContext(float zoom, string sourceId, string sourceLayer)
-            => new EvaluationContext(zoom)
-            {
-                SourceId = sourceId,
-                SourceLayer = sourceLayer,
-                FeatureStateStore = _featureStateStore,
-            };
-
-        private EvaluationContext MakeContext(float zoom, string sourceId, string sourceLayer,
-            VectorTileFeature feature)
-            => new EvaluationContext(zoom, feature)
-            {
-                SourceId = sourceId,
-                SourceLayer = sourceLayer,
-                FeatureStateStore = _featureStateStore,
-            };
-
         private struct PendingMesh
         {
             public CanonicalTileID TileId;
@@ -96,7 +79,7 @@ namespace MapLibre.Unity.Rendering
                 string key = "";
                 if (patternExpr != null)
                 {
-                    var ctx = MakeContext(zoom, sourceId, sourceLayer, f);
+                    var ctx = EvaluationContext.For(zoom, sourceId, sourceLayer, _featureStateStore, f);
                     key = patternExpr.EvaluateString(ctx, "") ?? "";
                 }
                 if (!groups.TryGetValue(key, out var list))
@@ -211,7 +194,7 @@ namespace MapLibre.Unity.Rendering
             LayerDefinition layerDef, MercatorCoordinate mapCenter, float zoom)
         {
             var paintProps = StyleParser.ParseFillExtrusionPaint(layerDef.Paint);
-            var ctx = MakeContext(zoom, layerDef.Source, layerDef.SourceLayer);
+            var ctx = EvaluationContext.For(zoom, layerDef.Source, layerDef.SourceLayer, _featureStateStore);
 
             var features = FilterPolygonFeatures(tileLayer, layerDef.Filter, zoom,
                 layerDef.Source, layerDef.SourceLayer);
@@ -329,7 +312,7 @@ namespace MapLibre.Unity.Rendering
 
                 if (filter != null)
                 {
-                    var ctx = MakeContext(zoom, sourceId, sourceLayer, feature);
+                    var ctx = EvaluationContext.For(zoom, sourceId, sourceLayer, _featureStateStore, feature);
                     if (!filter.EvaluateBool(ctx)) continue;
                 }
 

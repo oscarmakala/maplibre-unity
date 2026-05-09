@@ -101,29 +101,6 @@ namespace MapLibre.Unity.Rendering
         public void SetFeatureStateStore(Expressions.IFeatureStateStore store)
             => _featureStateStore = store;
 
-        private EvaluationContext MakeContext(float zoom, string sourceId, string sourceLayer)
-        {
-            var c = new EvaluationContext(zoom)
-            {
-                SourceId = sourceId,
-                SourceLayer = sourceLayer,
-                FeatureStateStore = _featureStateStore,
-            };
-            return c;
-        }
-
-        private EvaluationContext MakeContext(float zoom, string sourceId, string sourceLayer,
-            VectorTileFeature feature)
-        {
-            var c = new EvaluationContext(zoom, feature)
-            {
-                SourceId = sourceId,
-                SourceLayer = sourceLayer,
-                FeatureStateStore = _featureStateStore,
-            };
-            return c;
-        }
-
         /// <summary>
         /// Bucket features by the pattern name produced by <paramref name="patternExpr"/>
         /// (a fill-pattern / line-pattern paint property). Each unique pattern
@@ -143,7 +120,7 @@ namespace MapLibre.Unity.Rendering
                 string key = "";
                 if (patternExpr != null)
                 {
-                    var ctx = MakeContext(zoom, sourceId, sourceLayer, f);
+                    var ctx = EvaluationContext.For(zoom, sourceId, sourceLayer, _featureStateStore, f);
                     key = patternExpr.EvaluateString(ctx, "") ?? "";
                 }
                 if (!groups.TryGetValue(key, out var list))
@@ -420,7 +397,7 @@ namespace MapLibre.Unity.Rendering
             // Base width used for zoom-dependent _WidthScale ratio. Evaluated without
             // a feature so it represents the camera-only component of the expression.
             _dispatchBaseLineWidthCSS = paintProps.ResolveLineWidth(
-                MakeContext(zoom, layerDef.Source, layerDef.SourceLayer));
+                EvaluationContext.For(zoom, layerDef.Source, layerDef.SourceLayer, _featureStateStore));
 
             _lineTranslateCSS = paintProps.LineTranslate != null && paintProps.LineTranslate.Length >= 2
                 ? new Vector2(paintProps.LineTranslate[0], paintProps.LineTranslate[1])
@@ -638,7 +615,7 @@ namespace MapLibre.Unity.Rendering
             var capturedStore = _featureStateStore;
 
             float layerOpacity = opacityExpr != null
-                ? opacityExpr.EvaluateFloat(MakeContext(zoom, layerDef.Source, layerDef.SourceLayer), 1f)
+                ? opacityExpr.EvaluateFloat(EvaluationContext.For(zoom, layerDef.Source, layerDef.SourceLayer, _featureStateStore), 1f)
                 : 1f;
 
             BackgroundTask.Run(() =>
@@ -691,7 +668,7 @@ namespace MapLibre.Unity.Rendering
 
                 if (filter != null)
                 {
-                    var ctx = MakeContext(zoom, sourceId, sourceLayer, feature);
+                    var ctx = EvaluationContext.For(zoom, sourceId, sourceLayer, _featureStateStore, feature);
                     if (!filter.EvaluateBool(ctx)) continue;
                 }
 
@@ -714,7 +691,7 @@ namespace MapLibre.Unity.Rendering
 
                 if (filter != null)
                 {
-                    var ctx = MakeContext(zoom, sourceId, sourceLayer, feature);
+                    var ctx = EvaluationContext.For(zoom, sourceId, sourceLayer, _featureStateStore, feature);
                     if (!filter.EvaluateBool(ctx)) continue;
                 }
 

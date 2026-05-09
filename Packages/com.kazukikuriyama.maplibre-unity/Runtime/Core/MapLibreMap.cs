@@ -928,7 +928,7 @@ namespace MapLibre.Unity
         {
             var transformed = RequestTransformer.Apply(TransformRequest, url, ResourceKind.Style);
             if (transformed.Abort)
-                throw new Exception($"Request aborted by transformRequest: {url}");
+                throw new OperationCanceledException($"Request aborted by transformRequest: {url}");
 
             using var request = UnityEngine.Networking.UnityWebRequest.Get(transformed.Url);
             request.SetRequestHeader("User-Agent", "MapLibre-Unity/0.1");
@@ -943,7 +943,7 @@ namespace MapLibre.Unity
             await request.SendAsync();
 
             if (request.result != UnityEngine.Networking.UnityWebRequest.Result.Success)
-                throw new Exception(request.error);
+                throw new System.Net.Http.HttpRequestException($"{url}: {request.error}");
             return request.downloadHandler.text;
         }
 

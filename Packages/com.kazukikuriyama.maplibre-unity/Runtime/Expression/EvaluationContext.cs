@@ -73,5 +73,22 @@ namespace MapLibre.Unity.Expressions
             SourceLayer = null;
             FeatureStateStore = null;
         }
+
+        /// <summary>
+        /// Common factory used by every layer renderer to build an evaluation
+        /// context. Centralised so renderers don't each re-implement the same
+        /// 5-line populate-the-fields helper.
+        /// </summary>
+        public static EvaluationContext For(float zoom, string sourceId, string sourceLayer,
+            IFeatureStateStore featureStateStore, VectorTileFeature feature = null)
+        {
+            var ctx = feature != null
+                ? new EvaluationContext(zoom, feature)
+                : new EvaluationContext(zoom);
+            ctx.SourceId = sourceId;
+            ctx.SourceLayer = sourceLayer;
+            ctx.FeatureStateStore = featureStateStore;
+            return ctx;
+        }
     }
 }

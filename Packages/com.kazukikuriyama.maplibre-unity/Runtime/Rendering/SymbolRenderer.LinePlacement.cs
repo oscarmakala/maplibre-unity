@@ -72,7 +72,7 @@ namespace MapLibre.Unity.Rendering
             {
                 if (count >= _maxLabelsPerTile) break;
 
-                var featureCtx = MakeContext(zoom, layerDef.Source, layerDef.SourceLayer, feature);
+                var featureCtx = EvaluationContext.For(zoom, layerDef.Source, layerDef.SourceLayer, _featureStateStore, feature);
                 string text = ResolveText(layoutProps, featureCtx);
                 if (string.IsNullOrEmpty(text)) continue;
 
@@ -262,7 +262,7 @@ namespace MapLibre.Unity.Rendering
             {
                 if (count >= _maxLabelsPerTile) break;
 
-                var featureCtx = MakeContext(zoom, layerDef.Source, layerDef.SourceLayer, feature);
+                var featureCtx = EvaluationContext.For(zoom, layerDef.Source, layerDef.SourceLayer, _featureStateStore, feature);
                 string text = ResolveText(layoutProps, featureCtx);
                 if (string.IsNullOrEmpty(text)) continue;
 
@@ -399,7 +399,7 @@ namespace MapLibre.Unity.Rendering
                 if (feature.Type != GeometryType.LineString) continue;
                 if (filter != null)
                 {
-                    var ctx = MakeContext(zoom, sourceId, sourceLayer, feature);
+                    var ctx = EvaluationContext.For(zoom, sourceId, sourceLayer, _featureStateStore, feature);
                     if (!filter.EvaluateBool(ctx)) continue;
                 }
                 result.Add(feature);
