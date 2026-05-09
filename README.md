@@ -145,37 +145,13 @@ build has been smoke-tested by the maintainer; reports (and PRs) from
 people trying it on device are very welcome.
 
 **Experimental:** WebGL. Raster basemaps, vector tiles (Fill / Line /
-Circle / FillExtrusion), Heatmap, and Symbol / SDF text all render
-on WebGL Player builds verified by the maintainer. Threading and
-filesystem behaviour is adapted under `#if UNITY_WEBGL` guards:
-
-- The disk caches (`TileDiskCache`, `GlyphSource`) persist via
-  IndexedDB through a small JSLib bridge
-  (`Plugins/WebGL/MapLibreCacheBridge.jslib`). The native side does
-  not call `Application.persistentDataPath` on WebGL — that path is
-  IDBFS-backed and every `File.*` call blocks on IndexedDB sync —
-  so reads/writes go straight to IndexedDB asynchronously and the
-  C# coroutine yields one or two frames per lookup. Cached tiles,
-  sprite sheets, and glyph PBFs survive page reloads, honour
-  `Cache-Control` / `ETag`, and share the same LRU eviction logic
-  as native builds. The browser's HTTP cache continues to layer on
-  top of this for free.
-- `Task.Run` callsites go through `BackgroundTask.Run`, which on
-  WebGL Player invokes the body inline (no real worker thread) and
-  returns a pre-completed task so the existing polling pattern
-  exits immediately.
-- `VectorTileSource` runs an incremental ParseLazy-based coroutine
-  on WebGL with a 4 ms per-frame budget so heavy tiles spread
-  across multiple frames instead of stalling the main loop.
-- WebGL Player has no OS font enumeration, so UI Toolkit and Symbol
-  layers fall back to Unity's bundled `LegacyRuntime.ttf`. CJK /
-  emoji fonts must be wired through `MapLibreMap > Text > Symbol
-  Font` (TMP_FontAsset) for non-ASCII labels.
-
-Mesh-building still runs synchronously inline, so large tiles can
-introduce a frame stall during initial load; pan / zoom remains
-smooth between tile arrivals. WebGPU build target works the same
-way at compile time but is currently untested.
+Circle / FillExtrusion), Heatmap, and Symbol / SDF text all render on
+WebGL Player builds verified by the maintainer. Tiles persist across
+page reloads via an IndexedDB bridge. WebGL Player has no OS font
+enumeration, so CJK / emoji labels need a `TMP_FontAsset` wired to
+`MapLibreMap > Text > Symbol Font` — see
+[Documentation~/Architecture.md](Documentation~/Architecture.md#webgl-implementation-notes)
+for the full set of WebGL adaptations.
 
 ## Installation
 
@@ -204,27 +180,14 @@ Project window — no import step is required. Open
 `Packages/MapLibre Unity/Samples/Home/HomeScene.unity` to launch the
 demo browser.
 
-### Shader registration (automatic)
+### Shader registration
 
-Every layer's material is created at runtime via `Shader.Find("MapLibre/...")`,
-so the package's shaders must live in **Project Settings → Graphics →
-Always Included Shaders** to survive build stripping. This list is
-populated automatically: an `[InitializeOnLoad]` Editor hook
-(`AlwaysIncludedShadersRegistration`) scans
-`Packages/com.kazukikuriyama.maplibre-unity/Shaders/` on first Editor
-load after install and appends any missing entries to your project's
-`GraphicsSettings.asset`. Existing entries are preserved and re-runs
-are a no-op, so no manual Project Settings edits are required. If you
-ever need to verify the result, open
-**Edit → Project Settings → Graphics** and scroll to *Always Included
-Shaders* — every `MapLibre/*` shader should be listed.
-
-If a registration ever needs to be re-run manually (for example after
-a shader file was added while the Editor was closed, or to confirm the
-list is in sync), invoke **MapLibreUnity → Register Always Included
-Shaders** from the menu bar. The result is reported in the Console:
-either `Registered N shader(s)` or `All N package shader(s) are
-already registered`.
+The package's URP shaders are registered with **Project Settings →
+Graphics → Always Included Shaders** automatically on first Editor
+load — no manual setup required. To re-run the registration manually
+(e.g. after pulling new shader files), use **MapLibreUnity → Register
+Always Included Shaders**. Implementation details live in
+[Documentation~/Architecture.md](Documentation~/Architecture.md#shader-registration).
 
 ## Quick Start
 
@@ -293,65 +256,6 @@ lives at [Documentation~/GettingStarted.md](Documentation~/GettingStarted.md).
         }
     ]
 }
-```
-
-## Architecture
-
-The pipeline mirrors MapLibre GL JS's update / layout / render split:
-
-```
-User Input ─▶ MapInputHandler ─▶ MapState ─▶ MapLibreMap
-                                                  │
-                       ┌──────────────────────────┼──────────────────────────┐
-                       ▼                          ▼                          ▼
-                   MapCamera             TileGrid.GetVisibleTiles()      EventBus
-                                                  │                  (styledata, sourcedata,
-                                                  ▼                   click, hover, …)
-                                            TileManager
-                                          (cache + dispatch)
-                                                  │
-                ┌─────────────────────────────────┼─────────────────────────────────┐
-                ▼                                 ▼                                 ▼
-           Source impl                   Vector tile worker                    Renderers
-   Raster / Vector / GeoJSON         (Task.Run: PBF → meshes,           Fill / Line / Symbol /
-   PMTiles / MBTiles / Custom        applies expressions, filters,      FillExtrusion / Raster /
-                                     style props per zoom)              Heatmap / Hillshade /
-                                                                        Sky / Background / Custom
-```
-
-`Style` (parsed from `style.json`) is the source of truth for which
-sources / layers exist, their order, and their visual properties. Edits
-go through `MapLibreMap` (`AddLayer`, `SetPaintProperty`, …) which
-re-evaluates expressions and rebuilds only the affected layers — without
-re-fetching tile data when the underlying source bytes are still cached.
-
-## Project Structure
-
-```
-Packages/com.kazukikuriyama.maplibre-unity/
-  Runtime/
-    Core/         MapLibreMap, MapState, event bus, MapConstants
-    Coordinates/  LngLat, MercatorCoordinate, CoordinateConversion
-    Style/        StyleParser, StyleSpec, layer / source / sprite / glyph defs
-    Tiles/        TileID, TileGrid, TileManager, TileState
-    Source/       Raster / Vector / GeoJSON / RasterDem / Image sources
-      PMTiles/    Pure-C# PMTiles archive reader + raster/vector source
-      MBTiles/    SQLite-backed MBTiles wrapper (pluggable backend)
-    VectorTile/   PBF parser, geometry decoder, feature / layer types
-    Expression/   MapLibre style-spec expression evaluator + colour spaces
-    Rendering/    Per-layer renderers + SDF glyph atlas / mesh builders
-    Terrain/      DEM source, terrain mesh, hillshade integration
-    Camera/       MapCamera, MapAnimator (easeTo / flyTo / fitBounds),
-                  free-camera, MapInputHandler
-    UI/           Navigation / Scale / Geolocate / Fullscreen / Attribution
-    Pool/         ObjectPool, TileObjectPool
-  Shaders/        URP shaders (raster, line, fill-extrusion, sdf-text,
-                  heatmap, hillshade, sky)
-  Editor/         Inspectors, Font Setup wizard
-  Samples/        37 demo scenes plus a Home/ launcher — bundled with
-                  the package and visible directly under Packages/ in
-                  the Project window (read-only)
-  Tests/          EditMode + PlayMode test assemblies
 ```
 
 ## Text / Fonts
@@ -493,6 +397,9 @@ Contributor docs:
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to file issues, run tests,
   and submit PRs.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — community standards.
+- [Architecture](Documentation~/Architecture.md) — pipeline overview,
+  package layout, shader-registration mechanism, and WebGL
+  implementation notes.
 - [AGENTS.md](AGENTS.md) — canonical project rules for AI coding
   agents.
 

@@ -14,6 +14,8 @@
   href: OfflineArchives.md
 - name: Troubleshooting
   href: Troubleshooting.md
+- name: Architecture
+  href: Architecture.md
 - name: API Reference
   href: api/
   homepage: api/index.md
