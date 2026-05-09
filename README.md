@@ -136,8 +136,9 @@ Comparison against MapLibre Native (C++) and MapLibre GL JS (Web).
 
 - Unity 6 (6000.3.10f1) or later
 - Universal Render Pipeline (URP) 17.x
-- TextMeshPro — required for symbol layers (text / icons)
-  - On first use, import resources via **Window > TextMeshPro > Import TMP Essential Resources**
+- TextMeshPro — Unity 6 built-in. Used as a fallback for symbol layers (text / icons) when the style does not declare a `glyphs` URL.
+  - Styles with a `glyphs` URL render through the SDF pipeline and do **not** need TMP Essential Resources.
+  - For styles without `glyphs` (TMP fallback path), import resources via **Window > TextMeshPro > Import TMP Essential Resources** on first use.
 
 ### Supported platforms
 
@@ -268,7 +269,10 @@ lives at [Documentation~/GettingStarted.md](Documentation~/GettingStarted.md).
 
 ## Text / Fonts
 
-Symbol layer text labels use TextMeshPro (SDF).
+Symbol layer text labels render through one of two paths:
+
+1. **SDF glyph path (preferred)** — when the style declares a `glyphs` URL, glyph PBFs are fetched on demand, packed into an internal SDF atlas, and drawn via the `MapLibre/SdfText` shader. No `TMP_FontAsset` configuration is required. See [Glyph URL / SDF text](Documentation~/StyleSpec.md#glyphs).
+2. **TextMeshPro fallback** — when the style has no `glyphs` URL (or the SDF path can't fulfil a label), the renderer falls back to TextMeshPro. The setup options below apply to this path.
 
 ### Automatic setup (recommended)
 
