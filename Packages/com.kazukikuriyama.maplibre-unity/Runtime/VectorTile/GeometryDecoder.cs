@@ -106,13 +106,24 @@ namespace MapLibre.Unity.VectorTile
         /// </summary>
         public static float SignedArea(List<Vector2> ring)
         {
-            float area = 0;
+            // Accumulate in double, not float. A GeoJSON source polygon larger than one
+            // tile is currently encoded whole into every tile whose bounding box it
+            // overlaps (GeoJsonToVectorTile.GenerateTile does a bbox test but no
+            // clipping), so ring coordinates can reach tens of thousands of tile-local
+            // units instead of staying inside [0, extent]. Summing this shoelace series
+            // in single precision over many closely-spaced points at that magnitude
+            // loses catastrophically and can FLIP THE SIGN — after which
+            // ClassifyPolygonRings treats a valid exterior ring as an orphan hole and
+            // silently discards it, so the polygon never renders and nothing is logged.
+            // Observed with 4 ambulance-isochrone rings of 101-1295 points spanning
+            // kilometres: every ring dropped, polygonsCount=0.
+            double area = 0;
             int count = ring.Count;
             for (int i = 0, j = count - 1; i < count; j = i++)
             {
-                area += (ring[j].x - ring[i].x) * (ring[i].y + ring[j].y);
+                area += ((double)ring[j].x - ring[i].x) * ((double)ring[i].y + ring[j].y);
             }
-            return area * 0.5f;
+            return (float)(area * 0.5);
         }
 
         /// <summary>
