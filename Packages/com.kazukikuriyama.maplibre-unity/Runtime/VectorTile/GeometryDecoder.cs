@@ -146,11 +146,30 @@ namespace MapLibre.Unity.VectorTile
                     currentPolygon = new List<List<Vector2>> { rings[i] };
                     polygons.Add(currentPolygon);
                 }
-                else // Hole (CCW)
+                else // Negative area
                 {
                     if (currentPolygon != null)
                     {
-                        currentPolygon.Add(rings[i]);
+                        currentPolygon.Add(rings[i]); // Hole (CCW), as intended
+                    }
+                    else
+                    {
+                        // A negative ring with NO preceding exterior ring is not an
+                        // orphan hole -- a lone ring cannot be a hole. It is an
+                        // exterior ring wound the opposite way, which is common:
+                        // GeoJSON RFC 7946 asks for counter-clockwise exteriors while
+                        // MVT expects clockwise, and GeoJsonToVectorTile does not
+                        // normalise winding when it converts. Silently discarding it
+                        // loses real geometry with no warning.
+                        //
+                        // Measured on one real dataset: 4 of 4 ambulance-isochrone
+                        // rings dropped (consistently wound, so 100%), and 3,210 of
+                        // 6,475 OSM building footprints dropped (inconsistently wound,
+                        // so ~50%) -- none of it visible as an error anywhere.
+                        var exterior = new List<Vector2>(rings[i]);
+                        exterior.Reverse();
+                        currentPolygon = new List<List<Vector2>> { exterior };
+                        polygons.Add(currentPolygon);
                     }
                 }
             }
