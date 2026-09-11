@@ -16,8 +16,22 @@ namespace MapLibre.Unity.Source
     /// Coordinates are plain doubles in whatever space the caller uses. GenerateTile calls it
     /// in Mercator space against the already-buffered tile box, i.e. BEFORE the scale-to-tile
     /// step, so the buffer that the overlap test uses is the same buffer the clip uses and
-    /// neighbouring tiles still overlap by that margin -- which is what keeps seams from
-    /// showing at the joins.
+    /// neighbouring tiles overlap by that margin rather than abutting.
+    /// </para>
+    /// <para>
+    /// KNOWN ARTEFACT, unfixed. That overlap does NOT make the render seam-free. A controlled
+    /// Web capture of the HealthAtlas twin (same app build, only this package's pin differing)
+    /// counts 248 one-pixel holes inside the isochrone band fill after clipping against 207
+    /// before -- roughly 41 new ones, in short regularly-spaced near-vertical lines along tile
+    /// boundaries, each a partial-coverage pixel with the backdrop showing through. It cannot
+    /// be a gap BETWEEN tiles: they overlap by 2x the buffer (~6 px at that zoom) and
+    /// VectorTileMeshBuilder never clamps to the extent. The leading hypothesis is a crack
+    /// inside a single tile's own mesh -- Sutherland-Hodgman inserts collinear vertices along
+    /// the box edge, and (for a concave ring whose overlap with the box is disjoint)
+    /// zero-width bridge edges, either of which can make EarClipTriangulator drop an ear.
+    /// Stripping collinear points from the clipped ring before returning is the first thing to
+    /// try. Not attempted here: a fix needs a build-and-capture cycle to validate, and an
+    /// unvalidated fix is worse than a recorded finding. Resolve before offering upstream.
     /// </para>
     /// </summary>
     public static class TileClipper

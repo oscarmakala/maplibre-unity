@@ -271,8 +271,9 @@ namespace MapLibre.Unity.Source
                 // whole ring anyway duplicated every over-sized polygon into each tile it
                 // overlapped (R7b). Clipping happens here, in Mercator space and before the
                 // scale-to-tile step in ConvertFeature, against the SAME buffered box the
-                // overlap test uses -- so neighbouring tiles still share that margin and no
-                // seam opens along the join.
+                // overlap test uses -- so neighbouring tiles overlap by that margin rather
+                // than abutting. (That overlap does not make the render seam-free on its own;
+                // see the KNOWN ARTEFACT note on TileClipper.)
                 //
                 // Rings are clipped INDEPENDENTLY and in order. That is enough to satisfy
                 // "drop a polygon whose exterior clips away" without tracking which ring is an
