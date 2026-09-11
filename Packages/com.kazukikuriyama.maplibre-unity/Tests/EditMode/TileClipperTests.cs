@@ -300,7 +300,12 @@ namespace MapLibre.Unity.Tests.EditMode
             // tile 0/0/0, where the tolerance is about 45x the whole building; the first
             // version of the simplification pass emitted no 'buildings' layer at all and took
             // four PlayMode tests with it.
-            var tiny = Rect(1.0, 1.0, 1.0 + 1e-6, 1.0 + 1e-6);
+            // Sited near the origin rather than offset to (1,1): the shoelace multiplies
+            // coordinates before subtracting, so a 1e-6 box a whole unit from the origin is
+            // computed as the difference of two numbers near 1.0 and loses most of its
+            // significant digits. That is the test's own arithmetic, not the clipper's -- an
+            // earlier version of this assertion failed on it (1.000089e-12 vs 1e-12).
+            var tiny = Rect(1e-6, 1e-6, 2e-6, 2e-6);
             Assert.Less(1e-6, Tol, "precondition: this ring really is smaller than the tolerance");
 
             var clipped = Clip(tiny);
@@ -308,7 +313,7 @@ namespace MapLibre.Unity.Tests.EditMode
             Assert.AreEqual(5, clipped.Count,
                 "a sub-tolerance ring keeps its four corners -- dropping it loses a feature "
                 + "that exists in the source");
-            Assert.AreEqual(1e-12, SignedArea(clipped), 1e-18, "and keeps its (tiny) area");
+            Assert.AreEqual(1e-12, SignedArea(clipped), 1e-16, "and keeps its (tiny) area");
         }
 
         [Test]
