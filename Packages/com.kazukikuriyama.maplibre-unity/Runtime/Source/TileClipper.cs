@@ -72,8 +72,12 @@ namespace MapLibre.Unity.Source
             // Work on the open form. A closed input would otherwise put a duplicate vertex
             // through the clip and come back out as a duplicate that the caller has to strip
             // anyway; dropping it here keeps one representation through the whole routine.
+            // EXACT comparison, not the tolerance: a closed ring repeats its first point
+            // bit-for-bit, whereas two merely nearby endpoints of a ring smaller than the
+            // tolerance are a real edge, and swallowing it would cost that ring a vertex it
+            // cannot spare.
             int n = ring.Count;
-            if (n >= 2 && Near(ring[0], ring[n - 1], tol)) n--;
+            if (n >= 2 && Near(ring[0], ring[n - 1], 0.0)) n--;
             if (n < 3) return empty;
 
             var current = new List<double[]>(n);
@@ -88,11 +92,29 @@ namespace MapLibre.Unity.Source
             current = ClipHalfPlane(current, Edge.MaxY, maxY);
             if (current.Count == 0) return empty;
 
-            current = Simplify(current, tol);
-            if (current.Count < 3) return empty;
+            var simplified = Simplify(current, tol);
+            if (simplified.Count < 3)
+            {
+                // The whole ring is smaller than the precision it is being measured against,
+                // so tolerance-based merging erased it. That is the wrong answer: the ring is
+                // REAL, just sub-pixel at this zoom, and a tile is more than what will be
+                // drawn -- QuerySourceFeatures, selection and every style filter read the
+                // features in it. Dropping one here makes a building that exists in the source
+                // unqueryable at low zoom, which is a data loss, not a simplification.
+                //
+                // (Caught by StyleNullHeightTests, which transcodes 0.001-degree buildings into
+                // tile 0/0/0: at that zoom the tolerance is ~45x the whole building.)
+                //
+                // So fall back to EXACT merging -- bit-identical repeats and exactly collinear
+                // points, which are redundant at any scale. A ring that still cannot muster
+                // three distinct points after that genuinely encloses nothing (a corner touch,
+                // an edge-grazing sliver) and is dropped as before.
+                simplified = Simplify(current, 0.0);
+            }
+            if (simplified.Count < 3) return empty;
 
-            current.Add(new[] { current[0][0], current[0][1] }); // close it
-            return current;
+            simplified.Add(new[] { simplified[0][0], simplified[0][1] }); // close it
+            return simplified;
         }
 
         /// <summary>

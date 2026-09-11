@@ -288,6 +288,30 @@ namespace MapLibre.Unity.Tests.EditMode
         }
 
         [Test]
+        public void ClippedRing_SmallerThanTheTolerance_SurvivesInsteadOfVanishing()
+        {
+            // A ring three orders of magnitude below the merge tolerance. Every point is
+            // within tolerance of every other, so tolerance-based merging alone would collapse
+            // it to one point and drop it -- but the ring is REAL, merely sub-pixel at this
+            // zoom, and a tile is more than what gets drawn: QuerySourceFeatures, selection and
+            // every style filter read the features in it.
+            //
+            // Found the hard way. StyleNullHeightTests transcodes 0.001-degree buildings into
+            // tile 0/0/0, where the tolerance is about 45x the whole building; the first
+            // version of the simplification pass emitted no 'buildings' layer at all and took
+            // four PlayMode tests with it.
+            var tiny = Rect(1.0, 1.0, 1.0 + 1e-6, 1.0 + 1e-6);
+            Assert.Less(1e-6, Tol, "precondition: this ring really is smaller than the tolerance");
+
+            var clipped = Clip(tiny);
+
+            Assert.AreEqual(5, clipped.Count,
+                "a sub-tolerance ring keeps its four corners -- dropping it loses a feature "
+                + "that exists in the source");
+            Assert.AreEqual(1e-12, SignedArea(clipped), 1e-18, "and keeps its (tiny) area");
+        }
+
+        [Test]
         public void Ring_WithTooFewPoints_IsDropped()
         {
             Assert.AreEqual(0, Clip(new List<double[]>()).Count);
