@@ -272,8 +272,10 @@ namespace MapLibre.Unity.Source
                 // overlapped (R7b). Clipping happens here, in Mercator space and before the
                 // scale-to-tile step in ConvertFeature, against the SAME buffered box the
                 // overlap test uses -- so neighbouring tiles overlap by that margin rather
-                // than abutting. (That overlap does not make the render seam-free on its own;
-                // see the KNOWN ARTEFACT note on TileClipper.)
+                // than abutting. (That overlap does not make the render seam-free on its own:
+                // a pinhole seam along tile boundaries remains unexplained and this branch is
+                // HELD because of it -- see the KNOWN ARTEFACT paragraph in TileClipper's
+                // class summary, and the falsified hypothesis recorded beside it.)
                 //
                 // Rings are clipped INDEPENDENTLY and in order. That is enough to satisfy
                 // "drop a polygon whose exterior clips away" without tracking which ring is an

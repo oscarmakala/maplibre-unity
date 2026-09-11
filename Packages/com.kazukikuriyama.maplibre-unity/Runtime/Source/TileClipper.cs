@@ -19,21 +19,41 @@ namespace MapLibre.Unity.Source
     /// neighbouring tiles overlap by that margin rather than abutting.
     /// </para>
     /// <para>
-    /// Why <see cref="Simplify"/> exists -- the pinhole artefact. The first version of this
-    /// clipper returned every point Sutherland-Hodgman emitted, and that was NOT seam-free: a
+    /// KNOWN ARTEFACT -- the pinhole seam, unresolved. Clipping is NOT seam-free. A
     /// controlled Web capture of the HealthAtlas twin (same app build, only this package's pin
     /// differing) counted 248 one-pixel holes inside the isochrone band fill against 207
     /// before clipping -- roughly 41 new ones, in short regularly-spaced near-vertical lines
     /// along tile boundaries, each a partial-coverage pixel with the backdrop showing through.
-    /// It was never a gap BETWEEN tiles: they overlap by 2x the buffer (~6 px at that zoom)
-    /// and VectorTileMeshBuilder never clamps to the extent. It is a crack inside ONE tile's
-    /// own mesh. Sutherland-Hodgman repeats a vertex that sits on a clip edge, and a ring
-    /// crossing an edge at a shallow angle leaves runs of points collinear to far below the
-    /// precision EncodePolygons can encode; rounded to integers those become zero-length edges
-    /// and zero-area ears, and where EarClipTriangulator drops one, a pixel goes missing.
-    /// Simplify removes exactly those points -- everything the integer encoder would have
-    /// collapsed anyway -- before the ring leaves this class. The measured outcome is recorded
-    /// in the consuming repo's docs/increment-1a-results.md under "Clipping".
+    /// Because of it, the consuming repo HELD this branch and reverted its pin; do not offer
+    /// R7(b) upstream until it is resolved.
+    /// </para>
+    /// <para>
+    /// Why <see cref="Simplify"/> exists, and what it did NOT do. It was written against a
+    /// HYPOTHESIS, and that hypothesis was FALSIFIED on 2026-09-11. The hypothesis: the holes
+    /// are a crack inside ONE tile's own mesh, because Sutherland-Hodgman repeats a vertex
+    /// sitting on a clip edge and a ring crossing an edge at a shallow angle leaves runs of
+    /// points collinear to far below the precision EncodePolygons can encode; rounded to
+    /// integers those would become zero-length edges and zero-area ears, and where
+    /// EarClipTriangulator drops one a pixel goes missing. Simplify removes exactly those
+    /// points. It works as designed -- 3,093 fewer vertices reach the renderer, 198,424 down
+    /// to 195,331 -- and the artefact did not move: 248 holes before, 248 after, at the SAME
+    /// pixel coordinates with the same luminances, while the geometry underneath them changed.
+    /// If the holes were dropped ears caused by these vertices, changing these vertices would
+    /// have moved them. They did not, so they are not.
+    /// </para>
+    /// <para>
+    /// What that rules out, and where to look next. Ruled out: the vertices of the rings being
+    /// clipped (above). Ruled out by construction: a gap BETWEEN tiles -- adjacent tiles clip
+    /// against their own buffered boxes and overlap by 2x the buffer (~6 px at that zoom), and
+    /// VectorTileMeshBuilder never clamps to the extent. What is left is that the holes are
+    /// locked to TILE BOUNDARIES IN WORLD SPACE, independent of ring detail, which points
+    /// DOWNSTREAM of the mesh builder: a per-tile shader clip or discard at the tile quad edge,
+    /// the tile GameObject's bounds, or two tile meshes rasterising a shared world plane. That
+    /// is a renderer question, not a clipper question, which is why nothing further was changed
+    /// here and no second fix was guessed. Simplify is kept because it is a real reduction and
+    /// because reverting it would only re-add vertices the integer encoder collapses anyway --
+    /// not because it fixes anything. Every measurement is in the consuming repo's
+    /// docs/increment-1a-results.md under "Clipping (held)".
     /// </para>
     /// </summary>
     public static class TileClipper
@@ -145,14 +165,22 @@ namespace MapLibre.Unity.Source
         /// Drop the vertices that carry no shape: near-duplicates, and points lying on the
         /// straight line between their two neighbours.
         /// <para>
-        /// This is the fix for the R7b pinhole artefact. Sutherland-Hodgman emits a repeat
-        /// whenever a ring vertex sits on (or within a whisker of) a clip edge -- the
-        /// intersection and the kept endpoint coincide -- and a ring crossing an edge at a
-        /// shallow angle produces runs of points that are collinear to well below the
-        /// precision the tile encoder can represent. EncodePolygons then rounds those to
-        /// identical integers, handing EarClipTriangulator zero-length edges and zero-area
-        /// ears; where it drops one, a one-pixel hole opens in the fill. Those holes were
-        /// measured as short dotted lines running along tile boundaries.
+        /// This was WRITTEN as the fix for the R7b pinhole artefact, and it is NOT one --
+        /// see the KNOWN ARTEFACT and falsification notes on <see cref="TileClipper"/>. The
+        /// hypothesis it encodes: Sutherland-Hodgman emits a repeat whenever a ring vertex
+        /// sits on (or within a whisker of) a clip edge -- the intersection and the kept
+        /// endpoint coincide -- and a ring crossing an edge at a shallow angle produces runs
+        /// of points that are collinear to well below the precision the tile encoder can
+        /// represent; EncodePolygons would then round those to identical integers, handing
+        /// EarClipTriangulator zero-length edges and zero-area ears, and where it drops one a
+        /// one-pixel hole would open in the fill.
+        /// </para>
+        /// <para>
+        /// Measured 2026-09-11: this pass removes 3,093 vertices and the holes do not move --
+        /// same count, same pixel coordinates, same luminances. The hypothesis is falsified.
+        /// What this method still does is remove vertices the integer encoder would collapse
+        /// anyway, which is worth keeping on its own terms; what it does not do is close the
+        /// seam. Look downstream of the mesh builder instead.
         /// </para>
         /// <para>
         /// Both passes wrap around the ring, and the collinear pass repeats until nothing more
