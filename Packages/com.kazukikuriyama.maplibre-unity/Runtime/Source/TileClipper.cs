@@ -19,19 +19,21 @@ namespace MapLibre.Unity.Source
     /// neighbouring tiles overlap by that margin rather than abutting.
     /// </para>
     /// <para>
-    /// KNOWN ARTEFACT, unfixed. That overlap does NOT make the render seam-free. A controlled
-    /// Web capture of the HealthAtlas twin (same app build, only this package's pin differing)
-    /// counts 248 one-pixel holes inside the isochrone band fill after clipping against 207
-    /// before -- roughly 41 new ones, in short regularly-spaced near-vertical lines along tile
-    /// boundaries, each a partial-coverage pixel with the backdrop showing through. It cannot
-    /// be a gap BETWEEN tiles: they overlap by 2x the buffer (~6 px at that zoom) and
-    /// VectorTileMeshBuilder never clamps to the extent. The leading hypothesis is a crack
-    /// inside a single tile's own mesh -- Sutherland-Hodgman inserts collinear vertices along
-    /// the box edge, and (for a concave ring whose overlap with the box is disjoint)
-    /// zero-width bridge edges, either of which can make EarClipTriangulator drop an ear.
-    /// Stripping collinear points from the clipped ring before returning is the first thing to
-    /// try. Not attempted here: a fix needs a build-and-capture cycle to validate, and an
-    /// unvalidated fix is worse than a recorded finding. Resolve before offering upstream.
+    /// Why <see cref="Simplify"/> exists -- the pinhole artefact. The first version of this
+    /// clipper returned every point Sutherland-Hodgman emitted, and that was NOT seam-free: a
+    /// controlled Web capture of the HealthAtlas twin (same app build, only this package's pin
+    /// differing) counted 248 one-pixel holes inside the isochrone band fill against 207
+    /// before clipping -- roughly 41 new ones, in short regularly-spaced near-vertical lines
+    /// along tile boundaries, each a partial-coverage pixel with the backdrop showing through.
+    /// It was never a gap BETWEEN tiles: they overlap by 2x the buffer (~6 px at that zoom)
+    /// and VectorTileMeshBuilder never clamps to the extent. It is a crack inside ONE tile's
+    /// own mesh. Sutherland-Hodgman repeats a vertex that sits on a clip edge, and a ring
+    /// crossing an edge at a shallow angle leaves runs of points collinear to far below the
+    /// precision EncodePolygons can encode; rounded to integers those become zero-length edges
+    /// and zero-area ears, and where EarClipTriangulator drops one, a pixel goes missing.
+    /// Simplify removes exactly those points -- everything the integer encoder would have
+    /// collapsed anyway -- before the ring leaves this class. The measured outcome is recorded
+    /// in the consuming repo's docs/increment-1a-results.md under "Clipping".
     /// </para>
     /// </summary>
     public static class TileClipper
@@ -65,11 +67,13 @@ namespace MapLibre.Unity.Source
             var empty = new List<double[]>();
             if (ring == null || ring.Count < 3) return empty;
 
+            double tol = Tolerance(minX, minY, maxX, maxY);
+
             // Work on the open form. A closed input would otherwise put a duplicate vertex
             // through the clip and come back out as a duplicate that the caller has to strip
             // anyway; dropping it here keeps one representation through the whole routine.
             int n = ring.Count;
-            if (n >= 2 && Same(ring[0], ring[n - 1])) n--;
+            if (n >= 2 && Near(ring[0], ring[n - 1], tol)) n--;
             if (n < 3) return empty;
 
             var current = new List<double[]>(n);
@@ -84,23 +88,107 @@ namespace MapLibre.Unity.Source
             current = ClipHalfPlane(current, Edge.MaxY, maxY);
             if (current.Count == 0) return empty;
 
-            // Sutherland-Hodgman emits a repeat whenever a vertex sits exactly on a clip edge
-            // (the intersection and the kept endpoint coincide), and collapses a ring that
-            // only touches the box into a run of one point. Drop consecutive repeats, then the
-            // wrap-around repeat, and decide degeneracy on what is left.
-            var distinct = new List<double[]>(current.Count);
-            foreach (var p in current)
+            current = Simplify(current, tol);
+            if (current.Count < 3) return empty;
+
+            current.Add(new[] { current[0][0], current[0][1] }); // close it
+            return current;
+        }
+
+        /// <summary>
+        /// Merge tolerance, as a distance in the caller's own coordinate units.
+        /// <para>
+        /// It is derived from the box rather than fixed, because the box IS the scale that
+        /// matters: GenerateTile hands us one tile plus its 64-unit buffer, and then encodes
+        /// the result to integers at <c>DefaultExtent</c> = 4096 units per tile. A box side is
+        /// therefore about 4096 + 2x64 = 4224 integer steps, and box/8192 is a hair over HALF
+        /// one step. Anything closer together than that collapses to the same integer in
+        /// EncodePolygons anyway -- so removing it here throws away nothing the encoder could
+        /// have represented, while sparing the triangulator the zero-length edges and
+        /// zero-area ears that those collapsed points become.
+        /// </para>
+        /// <para>
+        /// At the twin's zoom that half-step is roughly 15 cm on the ground. A caller using
+        /// this class with a box that is not one MVT tile gets a proportional tolerance, which
+        /// is the sane reading of "negligible at this scale" either way.
+        /// </para>
+        /// </summary>
+        private static double Tolerance(double minX, double minY, double maxX, double maxY)
+        {
+            double span = Math.Max(maxX - minX, maxY - minY);
+            return span > 0 ? span / 8192.0 : 0.0;
+        }
+
+        /// <summary>
+        /// Drop the vertices that carry no shape: near-duplicates, and points lying on the
+        /// straight line between their two neighbours.
+        /// <para>
+        /// This is the fix for the R7b pinhole artefact. Sutherland-Hodgman emits a repeat
+        /// whenever a ring vertex sits on (or within a whisker of) a clip edge -- the
+        /// intersection and the kept endpoint coincide -- and a ring crossing an edge at a
+        /// shallow angle produces runs of points that are collinear to well below the
+        /// precision the tile encoder can represent. EncodePolygons then rounds those to
+        /// identical integers, handing EarClipTriangulator zero-length edges and zero-area
+        /// ears; where it drops one, a one-pixel hole opens in the fill. Those holes were
+        /// measured as short dotted lines running along tile boundaries.
+        /// </para>
+        /// <para>
+        /// Both passes wrap around the ring, and the collinear pass repeats until nothing more
+        /// is removed, because removing one vertex can make a neighbour redundant in turn.
+        /// Neither pass reorders anything, so winding is preserved; neither moves a surviving
+        /// vertex, so the area changes only by the sub-tolerance slivers it removes.
+        /// </para>
+        /// </summary>
+        private static List<double[]> Simplify(List<double[]> pts, double tol)
+        {
+            var outp = new List<double[]>(pts.Count);
+            foreach (var p in pts)
             {
-                if (distinct.Count == 0 || !Same(distinct[distinct.Count - 1], p))
-                    distinct.Add(p);
+                if (outp.Count == 0 || !Near(outp[outp.Count - 1], p, tol)) outp.Add(p);
             }
-            while (distinct.Count > 1 && Same(distinct[0], distinct[distinct.Count - 1]))
-                distinct.RemoveAt(distinct.Count - 1);
+            while (outp.Count > 1 && Near(outp[0], outp[outp.Count - 1], tol))
+                outp.RemoveAt(outp.Count - 1);
 
-            if (distinct.Count < 3) return empty;
+            if (outp.Count < 3) return outp;
 
-            distinct.Add(new[] { distinct[0][0], distinct[0][1] }); // close it
-            return distinct;
+            bool removedAny = true;
+            while (removedAny && outp.Count >= 3)
+            {
+                removedAny = false;
+                int i = 0;
+                while (i < outp.Count && outp.Count >= 3)
+                {
+                    var a = outp[(i + outp.Count - 1) % outp.Count];
+                    var b = outp[i];
+                    var c = outp[(i + 1) % outp.Count];
+                    if (IsRedundant(a, b, c, tol))
+                    {
+                        outp.RemoveAt(i);
+                        removedAny = true;
+                    }
+                    else
+                    {
+                        i++;
+                    }
+                }
+            }
+            return outp;
+        }
+
+        /// <summary>
+        /// True when b adds nothing to the ring: either its two neighbours have collapsed onto
+        /// each other (so a-b-c is a zero-area spike), or b's perpendicular distance from the
+        /// line a-c is within tolerance.
+        /// </summary>
+        private static bool IsRedundant(double[] a, double[] b, double[] c, double tol)
+        {
+            double dx = c[0] - a[0];
+            double dy = c[1] - a[1];
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len <= tol) return true;
+
+            double cross = dx * (b[1] - a[1]) - dy * (b[0] - a[0]);
+            return Math.Abs(cross) / len <= tol;
         }
 
         private enum Edge { MinX, MaxX, MinY, MaxY }
@@ -167,6 +255,11 @@ namespace MapLibre.Unity.Source
             return output;
         }
 
-        private static bool Same(double[] a, double[] b) => a[0] == b[0] && a[1] == b[1];
+        private static bool Near(double[] a, double[] b, double tol)
+        {
+            double dx = a[0] - b[0];
+            double dy = a[1] - b[1];
+            return dx * dx + dy * dy <= tol * tol;
+        }
     }
 }

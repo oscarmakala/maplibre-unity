@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using MapLibre.Unity.Source;
 using NUnit.Framework;
@@ -156,6 +157,134 @@ namespace MapLibre.Unity.Tests.EditMode
             Assert.AreEqual(clipped[0][0], clipped[clipped.Count - 1][0], 1e-12);
             Assert.AreEqual(clipped[0][1], clipped[clipped.Count - 1][1], 1e-12);
             Assert.AreEqual(1.0, SignedArea(clipped), 1e-12);
+        }
+
+        // === The collinear/duplicate post-pass (fix round 1 of the R7b pinhole artefact) ===
+        //
+        // A clipped ring used to keep every point Sutherland-Hodgman emitted, including
+        // repeats where a vertex sat on a clip edge and runs of points collinear to far below
+        // the precision EncodePolygons can represent. Rounded to integers those become
+        // zero-length edges and zero-area ears; where EarClipTriangulator drops one, a
+        // one-pixel hole opens in the fill. Measured on the HealthAtlas twin's Web build as
+        // short dotted lines running along tile boundaries.
+
+        /// <summary>Perpendicular distance of b from the line a-c, the collinearity measure.</summary>
+        static double DistanceFromLine(double[] a, double[] b, double[] c)
+        {
+            double dx = c[0] - a[0], dy = c[1] - a[1];
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len == 0) return 0;
+            return Math.Abs(dx * (b[1] - a[1]) - dy * (b[0] - a[0])) / len;
+        }
+
+        static double SmallestGap(IReadOnlyList<double[]> ring)
+        {
+            int n = ring.Count;
+            if (n >= 2 && ring[0][0] == ring[n - 1][0] && ring[0][1] == ring[n - 1][1]) n--;
+            double min = double.MaxValue;
+            for (int i = 0; i < n; i++)
+            {
+                var a = ring[i];
+                var b = ring[(i + 1) % n];
+                min = Math.Min(min, Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])));
+            }
+            return min;
+        }
+
+        static double SmallestLineDistance(IReadOnlyList<double[]> ring)
+        {
+            int n = ring.Count;
+            if (n >= 2 && ring[0][0] == ring[n - 1][0] && ring[0][1] == ring[n - 1][1]) n--;
+            double min = double.MaxValue;
+            for (int i = 0; i < n; i++)
+                min = Math.Min(min, DistanceFromLine(ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]));
+            return min;
+        }
+
+        /// <summary>
+        /// The tolerance ClipRing derives from this box: one side / 8192, i.e. a hair over half
+        /// an integer step at MVT extent 4096 plus a 64-unit buffer.
+        /// </summary>
+        const double Tol = (MaxX - MinX) / 8192.0;
+
+        /// <summary>
+        /// A rectangle straddling the box, carrying redundant vertices halfway along the two
+        /// edges that survive the clip. Those points are exactly collinear and must not reach
+        /// the encoder.
+        /// </summary>
+        static List<double[]> StraddlingRectWithCollinearVertices()
+        {
+            return new List<double[]>
+            {
+                new[] { -1.0, -1.0 },
+                new[] {  2.0, -1.0 },
+                new[] {  2.0,  0.5 },   // redundant: mid-point of the right edge
+                new[] {  2.0,  2.0 },
+                new[] {  0.5,  2.0 },   // redundant: mid-point of the top edge
+                new[] { -1.0,  2.0 },
+                new[] { -1.0, -1.0 }
+            };
+        }
+
+        [Test]
+        public void ClippedRing_HasNoThreeConsecutiveCollinearPoints()
+        {
+            var clipped = Clip(StraddlingRectWithCollinearVertices());
+
+            Assert.AreEqual(5, clipped.Count,
+                "the clipped overlap is the square (0,0)-(2,2): 4 corners plus the closing "
+                + "repeat. 7 means the two mid-edge points survived, and those are exactly the "
+                + "vertices that round to a zero-length edge and cost a triangle.");
+            Assert.Greater(SmallestLineDistance(clipped), Tol,
+                "no vertex may lie within tolerance of the line through its two neighbours");
+        }
+
+        [Test]
+        public void ClippedRing_NearDuplicatePoints_AreMerged()
+        {
+            // The vertex just INSIDE the clip edge is 1e-5 from the intersection point that the
+            // previous, outside vertex generates -- far below Tol (~4.9e-4 for this box), but
+            // not bit-identical, so exact-equality de-duplication leaves both.
+            var ring = new List<double[]>
+            {
+                new[] { -1.0,   1.0 },
+                new[] {  1e-5,  1.0 },
+                new[] {  3.0,   1.0 },
+                new[] {  3.0,   3.0 },
+                new[] { -1.0,   3.0 }
+            };
+
+            var clipped = Clip(ring);
+
+            Assert.AreEqual(5, clipped.Count,
+                "(0,1) and (1e-5,1) are the same point at this scale and must merge; 6 means "
+                + "only bit-identical repeats were removed");
+            Assert.Greater(SmallestGap(clipped), Tol,
+                "no two consecutive vertices may sit within tolerance of each other");
+            Assert.AreEqual(6.0, SignedArea(clipped), 1e-4,
+                "the surviving shape is still the 3x2 rectangle the clip produced");
+        }
+
+        [Test]
+        public void ClippedRing_SimplificationChangesNeitherAreaNorWinding()
+        {
+            var ccw = StraddlingRectWithCollinearVertices();
+            Assert.Greater(SignedArea(ccw), 0, "precondition: the source ring is counter-clockwise");
+
+            var clipped = Clip(ccw);
+            Assert.AreEqual(4.0, SignedArea(clipped), 1e-12,
+                "removing a point that lies exactly on the line between its neighbours removes "
+                + "no area at all -- the clipped square (0,0)-(2,2) is still 4");
+            Assert.Greater(SignedArea(clipped), 0, "and the ring is still counter-clockwise");
+
+            var cw = new List<double[]>(ccw);
+            cw.Reverse();
+            var clippedCw = Clip(cw);
+            Assert.Less(SignedArea(clippedCw), 0, "a clockwise ring stays clockwise through the pass");
+            Assert.AreEqual(-SignedArea(clipped), SignedArea(clippedCw), 1e-12,
+                "both windings simplify to the same shape, differing only in sign");
+            Assert.AreEqual(clipped.Count, clippedCw.Count,
+                "and to the same number of points");
         }
 
         [Test]
