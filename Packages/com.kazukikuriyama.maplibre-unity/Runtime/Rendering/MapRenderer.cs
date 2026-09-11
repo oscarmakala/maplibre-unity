@@ -182,16 +182,7 @@ namespace MapLibre.Unity.Rendering
                 {
                     case LayerType.Background:
                     {
-                        _backgroundPaint = StyleParser.ParseBackgroundPaint(layer.Paint);
-                        _backgroundRenderer = new BackgroundRenderer();
-                        _backgroundRenderer.Initialize(mapRoot, backgroundShader,
-                            _backgroundPaint.ResolveBackgroundColor(0f),
-                            _backgroundPaint.ResolveOpacity(0f),
-                            _backgroundPatternShader, spriteAtlas);
-                        var initialPattern = _backgroundPaint.ResolveBackgroundPattern(0f);
-                        if (!string.IsNullOrEmpty(initialPattern))
-                            _backgroundRenderer.UpdatePattern(initialPattern,
-                                _backgroundPaint.ResolveOpacity(0f));
+                        EnsureBackgroundRenderer(layer);
                         break;
                     }
                     case LayerType.Raster:
@@ -330,6 +321,36 @@ namespace MapLibre.Unity.Rendering
         }
 
         /// <summary>
+        /// Create or refresh the background renderer for <paramref name="layer"/>.
+        /// Shared by Initialize()'s constructor-time Background case and
+        /// AddRendererForLayer's dynamic-AddLayer case so both paths apply
+        /// identical handling. Reuses <see cref="_backgroundRenderer"/> if one
+        /// already exists (the Style Spec allows at most one background layer)
+        /// instead of allocating a second.
+        /// </summary>
+        private void EnsureBackgroundRenderer(LayerDefinition layer)
+        {
+            _backgroundPaint = StyleParser.ParseBackgroundPaint(layer.Paint);
+            if (_backgroundRenderer == null)
+            {
+                _backgroundRenderer = new BackgroundRenderer();
+                _backgroundRenderer.Initialize(_mapRoot, _backgroundShader,
+                    _backgroundPaint.ResolveBackgroundColor(0f),
+                    _backgroundPaint.ResolveOpacity(0f),
+                    _backgroundPatternShader, _spriteAtlas);
+            }
+            else
+            {
+                _backgroundRenderer.UpdateColor(_backgroundPaint.ResolveBackgroundColor(0f),
+                    _backgroundPaint.ResolveOpacity(0f));
+            }
+            var initialPattern = _backgroundPaint.ResolveBackgroundPattern(0f);
+            if (!string.IsNullOrEmpty(initialPattern))
+                _backgroundRenderer.UpdatePattern(initialPattern,
+                    _backgroundPaint.ResolveOpacity(0f));
+        }
+
+        /// <summary>
         /// Create a renderer for a dynamically added layer.
         /// Returns true if the renderer was created successfully.
         /// </summary>
@@ -338,30 +359,12 @@ namespace MapLibre.Unity.Rendering
             switch (layer.Type)
             {
                 case LayerType.Background:
-                {
-                    // Mirrors Initialize()'s case LayerType.Background -- reuse the
-                    // renderer if one already exists (the Style Spec allows at most
-                    // one background layer) instead of allocating a second.
-                    _backgroundPaint = StyleParser.ParseBackgroundPaint(layer.Paint);
-                    if (_backgroundRenderer == null)
-                    {
-                        _backgroundRenderer = new BackgroundRenderer();
-                        _backgroundRenderer.Initialize(_mapRoot, _backgroundShader,
-                            _backgroundPaint.ResolveBackgroundColor(0f),
-                            _backgroundPaint.ResolveOpacity(0f),
-                            _backgroundPatternShader, _spriteAtlas);
-                    }
-                    else
-                    {
-                        _backgroundRenderer.UpdateColor(_backgroundPaint.ResolveBackgroundColor(0f),
-                            _backgroundPaint.ResolveOpacity(0f));
-                    }
-                    var initialPattern = _backgroundPaint.ResolveBackgroundPattern(0f);
-                    if (!string.IsNullOrEmpty(initialPattern))
-                        _backgroundRenderer.UpdatePattern(initialPattern,
-                            _backgroundPaint.ResolveOpacity(0f));
+                    // true here means "handled" (created or reused), not "newly
+                    // created" -- the Style Spec allows at most one background
+                    // layer, so a repeat call updates the existing renderer
+                    // instead of signalling failure.
+                    EnsureBackgroundRenderer(layer);
                     return true;
-                }
 
                 case LayerType.Raster:
                 {
