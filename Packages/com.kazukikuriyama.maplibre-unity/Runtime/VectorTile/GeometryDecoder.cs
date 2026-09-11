@@ -107,10 +107,14 @@ namespace MapLibre.Unity.VectorTile
         public static float SignedArea(List<Vector2> ring)
         {
             // Accumulate in double, not float. A GeoJSON source polygon larger than one
-            // tile is currently encoded whole into every tile whose bounding box it
-            // overlaps (GeoJsonToVectorTile.GenerateTile does a bbox test but no
-            // clipping), so ring coordinates can reach tens of thousands of tile-local
-            // units instead of staying inside [0, extent]. Summing this shoelace series
+            // tile USED to be encoded whole into every tile whose bounding box it
+            // overlapped (GeoJsonToVectorTile.GenerateTile did a bbox test but no
+            // clipping), so ring coordinates could reach tens of thousands of tile-local
+            // units instead of staying inside [0, extent]. TileClipper now clips rings to
+            // the buffered tile box on that path (R7b) -- but this accumulation stays in
+            // double regardless: the decoder also reads MVT tiles it did not generate, and
+            // nothing in the format stops those carrying far out-of-extent coordinates.
+            // Summing this shoelace series
             // in single precision over many closely-spaced points at that magnitude
             // loses catastrophically and can FLIP THE SIGN — after which
             // ClassifyPolygonRings treats a valid exterior ring as an orphan hole and

@@ -266,7 +266,33 @@ namespace MapLibre.Unity.Source
                     feature.MaxY < bMinY || feature.MinY > bMaxY)
                     continue;
 
-                var mvtFeature = ConvertFeature(feature, layer,
+                // Polygons are CLIPPED to the buffered box, not merely tested against it.
+                // The bbox test above only says the feature touches this tile; encoding the
+                // whole ring anyway duplicated every over-sized polygon into each tile it
+                // overlapped (R7b). Clipping happens here, in Mercator space and before the
+                // scale-to-tile step in ConvertFeature, against the SAME buffered box the
+                // overlap test uses -- so neighbouring tiles still share that margin and no
+                // seam opens along the join.
+                //
+                // Rings are clipped INDEPENDENTLY and in order. That is enough to satisfy
+                // "drop a polygon whose exterior clips away" without tracking which ring is an
+                // exterior (a MultiPolygon arrives here already flattened into one ring list):
+                // a hole lies inside its exterior, so an exterior that misses the box takes
+                // every one of its holes with it -- each of them clips to empty on its own.
+                // Order is preserved for the survivors, which is what
+                // GeometryDecoder.ClassifyPolygonRings needs to keep pairing holes with the
+                // exterior ring that precedes them.
+                //
+                // Lines and points are out of scope: this twin draws none, and clipping a line
+                // needs the multi-part result Sutherland-Hodgman does not produce.
+                var rings = feature.Rings;
+                if (feature.Type == GeometryType.Polygon)
+                {
+                    rings = ClipRings(feature.Rings, bMinX, bMinY, bMaxX, bMaxY);
+                    if (rings.Count == 0) continue;
+                }
+
+                var mvtFeature = ConvertFeature(feature, rings, layer,
                     tileMinX, tileMinY, tileSize);
                 if (mvtFeature != null)
                     layer._features.Add(mvtFeature);
@@ -278,7 +304,30 @@ namespace MapLibre.Unity.Source
             return tileData;
         }
 
-        private static VectorTileFeature ConvertFeature(GeoJsonFeature src, VectorTileLayer layer,
+        /// <summary>
+        /// Clip every ring to the buffered tile box, dropping the ones that clip away to
+        /// nothing. See the comment at the call site for why independent per-ring clipping is
+        /// sufficient to drop a whole polygon whose exterior misses the tile.
+        /// </summary>
+        private static List<List<double[]>> ClipRings(List<List<double[]>> rings,
+            double minX, double minY, double maxX, double maxY)
+        {
+            var clipped = new List<List<double[]>>(rings.Count);
+            foreach (var ring in rings)
+            {
+                var c = TileClipper.ClipRing(ring, minX, minY, maxX, maxY);
+                if (c.Count > 0) clipped.Add(c);
+            }
+            return clipped;
+        }
+
+        /// <param name="rings">
+        /// The geometry to encode. For polygons this is the CLIPPED ring list, not
+        /// <c>src.Rings</c>; for points and lines the caller passes <c>src.Rings</c> through
+        /// unchanged. Everything else about the feature still comes from <paramref name="src"/>.
+        /// </param>
+        private static VectorTileFeature ConvertFeature(GeoJsonFeature src,
+            List<List<double[]>> rings, VectorTileLayer layer,
             double tileMinX, double tileMinY, double tileSize)
         {
             // Build MVT geometry commands
@@ -288,13 +337,13 @@ namespace MapLibre.Unity.Source
             switch (src.Type)
             {
                 case GeometryType.Point:
-                    EncodePoints(src.Rings, commands, tileMinX, tileMinY, scale);
+                    EncodePoints(rings, commands, tileMinX, tileMinY, scale);
                     break;
                 case GeometryType.LineString:
-                    EncodeLines(src.Rings, commands, tileMinX, tileMinY, scale);
+                    EncodeLines(rings, commands, tileMinX, tileMinY, scale);
                     break;
                 case GeometryType.Polygon:
-                    EncodePolygons(src.Rings, commands, tileMinX, tileMinY, scale);
+                    EncodePolygons(rings, commands, tileMinX, tileMinY, scale);
                     break;
             }
 
